@@ -17,10 +17,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.ultrapg.luna.assistant.AssistantLiveState
 import com.ultrapg.luna.assistant.AssistantOverlayPhase
 import com.ultrapg.luna.assistant.AssistantRoleHelper
@@ -38,16 +43,38 @@ fun OverlayConfigScreen(
     onRequestAssistantRole: () -> Unit
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val settings by LunaSettingsRepository.settingsFlow.collectAsState()
     val scrollState = rememberScrollState()
     val isGerman = settings.appLanguage.isGerman
 
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    // 0 = Listening, 1 = Thinking, 2 = Speaking
+    // 0 = Listening (white bars), 1 = Thinking (white stretched pill), 2 = Speaking (light blue bars)
     var previewMode by remember { mutableIntStateOf(0) }
+    var showFullScreenCalibrator by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         canDrawOverlays = Settings.canDrawOverlays(context)
+    }
+
+    val previewState = remember(previewMode) {
+        when (previewMode) {
+            0 -> AssistantLiveState(
+                isVisible = true,
+                isExpanded = true,
+                phase = AssistantOverlayPhase.LISTENING
+            )
+            1 -> AssistantLiveState(
+                isVisible = true,
+                isExpanded = true,
+                phase = AssistantOverlayPhase.THINKING
+            )
+            else -> AssistantLiveState(
+                isVisible = true,
+                isExpanded = true,
+                phase = AssistantOverlayPhase.SPEAKING
+            )
+        }
     }
 
     Column(
@@ -57,7 +84,7 @@ fun OverlayConfigScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Vertical Side-Notch Preview Box
+        // 1. Tall Interactive Screen-Edge Preview & Fullscreen Calibrator Section
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
             shape = RoundedCornerShape(20.dp),
@@ -67,12 +94,22 @@ fun OverlayConfigScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text = if (isGerman) "Vertikaler Seiten-Notch" else "Vertical Side-Notch Preview",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isGerman) "Vorschau & Power-Tasten-Position" else "Preview & Power Button Position",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
+                // State switcher: Listen (White Bars) | Think (White Stretched Pill) | Speak (Light-Blue Bars)
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     val labels = if (isGerman) {
                         listOf("Hören", "Denken", "Sprechen")
@@ -90,61 +127,116 @@ fun OverlayConfigScreen(
                     }
                 }
 
-                val previewAlignment = when (settings.bubbleEdge) {
-                    BubbleEdge.RIGHT -> Alignment.CenterEnd
-                    BubbleEdge.LEFT -> Alignment.CenterStart
-                    BubbleEdge.FREE -> Alignment.Center
+                // Tall proportional Phone Screen Canvas where the user can drag the vertical notch up/down
+                var canvasHeightPx by remember { mutableIntStateOf(1) }
+                val notchHeightPx = with(density) {
+                    (settings.bubbleExpandedHeightDp * settings.bubbleScale).dp.roundToPx()
                 }
 
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(175.dp)
-                        .clip(RoundedCornerShape(18.dp))
+                        .height(320.dp)
+                        .clip(RoundedCornerShape(22.dp))
                         .background(Color(0xFF090B10))
-                        .border(1.dp, Color(0xFF222634), RoundedCornerShape(18.dp))
+                        .border(1.5.dp, Color(0xFF252A3A), RoundedCornerShape(22.dp))
+                        .onSizeChanged { canvasHeightPx = it.height.coerceAtLeast(1) }
                         .pointerInput(Unit) {
                             detectDragGestures { change, dragAmount ->
                                 change.consume()
-                                LunaOverlayWindowManager.handleDragDelta(context, dragAmount.x, dragAmount.y)
+                                val deltaFrac = dragAmount.y / canvasHeightPx.toFloat()
+                                val newFrac = (settings.bubbleVerticalFraction + deltaFrac).coerceIn(0.04f, 0.88f)
+                                LunaSettingsRepository.update(context) {
+                                    it.copy(bubbleVerticalFraction = newFrac)
+                                }
+                                LunaOverlayWindowManager.syncWindowPosition(context)
                             }
-                        },
-                    contentAlignment = previewAlignment
-                ) {
-                    val previewState = remember(previewMode) {
-                        when (previewMode) {
-                            0 -> AssistantLiveState(
-                                isVisible = true,
-                                isExpanded = true,
-                                phase = AssistantOverlayPhase.LISTENING
-                            )
-                            1 -> AssistantLiveState(
-                                isVisible = true,
-                                isExpanded = true,
-                                phase = AssistantOverlayPhase.THINKING
-                            )
-                            else -> AssistantLiveState(
-                                isVisible = true,
-                                isExpanded = true,
-                                phase = AssistantOverlayPhase.SPEAKING
-                            )
                         }
+                ) {
+                    // Subtle guide label inside the screen canvas
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "${(settings.bubbleVerticalFraction * 100).roundToInt()}%",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF4A5268)
+                        )
+                        Text(
+                            text = if (isGerman) {
+                                "Ziehe die Pill hier hoch/runter oder nutze den Vollbild-Modus, um sie direkt neben deiner Power-Taste zu platzieren."
+                            } else {
+                                "Drag the pill up/down here or open Fullscreen Mode to align it directly next to your physical power button."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF687089)
+                        )
                     }
 
-                    GeminiSidePillOverlay(
-                        liveState = previewState,
-                        settings = settings,
-                        micRms = 0.52f,
-                        waveBands = floatArrayOf(0.35f, 0.65f, 0.88f, 0.60f, 0.40f),
-                        ttsRms = 0.55f,
-                        isSpeaking = previewMode == 2,
-                        onDragDelta = { dx, dy ->
-                            LunaOverlayWindowManager.handleDragDelta(context, dx, dy)
+                    val yOffsetPx = ((canvasHeightPx - notchHeightPx).coerceAtLeast(0) *
+                        settings.bubbleVerticalFraction).roundToInt()
+
+                    val horizontalAlign = when (settings.bubbleEdge) {
+                        BubbleEdge.RIGHT -> Alignment.TopEnd
+                        BubbleEdge.LEFT -> Alignment.TopStart
+                        BubbleEdge.FREE -> Alignment.TopCenter
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .align(horizontalAlign)
+                            .offset { IntOffset(0, yOffsetPx) }
+                    ) {
+                        GeminiSidePillOverlay(
+                            liveState = previewState,
+                            settings = settings,
+                            micRms = 0.56f,
+                            waveBands = floatArrayOf(0.35f, 0.65f, 0.88f, 0.60f, 0.40f),
+                            ttsRms = 0.60f,
+                            isSpeaking = previewMode == 2,
+                            onDragDelta = { dx, dy ->
+                                val deltaFrac = dy / canvasHeightPx.toFloat()
+                                val newFrac = (settings.bubbleVerticalFraction + deltaFrac).coerceIn(0.04f, 0.88f)
+                                var newEdge = settings.bubbleEdge
+                                if (dx < -40f && settings.bubbleEdge == BubbleEdge.RIGHT) {
+                                    newEdge = BubbleEdge.LEFT
+                                } else if (dx > 40f && settings.bubbleEdge == BubbleEdge.LEFT) {
+                                    newEdge = BubbleEdge.RIGHT
+                                }
+                                LunaSettingsRepository.update(context) {
+                                    it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
+                                }
+                                LunaOverlayWindowManager.syncWindowPosition(context)
+                            },
+                            onToggleExpand = {
+                                previewMode = (previewMode + 1) % 3
+                            },
+                            onDismiss = {}
+                        )
+                    }
+                }
+
+                // Prominent Fullscreen Real-Edge Calibration Button
+                Button(
+                    onClick = { showFullScreenCalibrator = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Fullscreen, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isGerman) {
+                            "Vollbild-Ausrichtung an der Power-Taste"
+                        } else {
+                            "Fullscreen Power-Button Calibration"
                         },
-                        onToggleExpand = {
-                            previewMode = (previewMode + 1) % 3
-                        },
-                        onDismiss = {}
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -196,7 +288,7 @@ fun OverlayConfigScreen(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (canDrawOverlays) {
-                            if (isGerman) "Seiten-Notch jetzt starten" else "Launch Side-Notch Now"
+                            if (isGerman) "Pill jetzt testen" else "Test Pill Now"
                         } else {
                             if (isGerman) "Overlay-Berechtigung erteilen" else "Grant Overlay Permission"
                         },
@@ -267,7 +359,7 @@ fun OverlayConfigScreen(
                     label = if (isGerman) "Höhe am Bildschirmrand (Power-Taste)" else "Edge Height (Power Button)",
                     valueText = "${(settings.bubbleVerticalFraction * 100).roundToInt()}%",
                     value = settings.bubbleVerticalFraction,
-                    valueRange = 0.05f..0.90f,
+                    valueRange = 0.04f..0.88f,
                     onValueChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(bubbleVerticalFraction = v) }
                         LunaOverlayWindowManager.syncWindowPosition(context)
@@ -286,7 +378,7 @@ fun OverlayConfigScreen(
                 )
 
                 SliderSettingRow(
-                    label = if (isGerman) "Notch-Breite" else "Notch Width",
+                    label = if (isGerman) "Pill-Breite" else "Pill Width",
                     valueText = "${settings.bubbleExpandedWidthDp} dp",
                     value = settings.bubbleExpandedWidthDp.toFloat().coerceIn(24f, 54f),
                     valueRange = 24f..54f,
@@ -296,7 +388,7 @@ fun OverlayConfigScreen(
                 )
 
                 SliderSettingRow(
-                    label = if (isGerman) "Notch-Höhe" else "Notch Height",
+                    label = if (isGerman) "Pill-Höhe" else "Pill Height",
                     valueText = "${settings.bubbleExpandedHeightDp} dp",
                     value = settings.bubbleExpandedHeightDp.toFloat().coerceIn(88f, 220f),
                     valueRange = 88f..220f,
@@ -335,6 +427,188 @@ fun OverlayConfigScreen(
                     modifier = Modifier.align(Alignment.End)
                 ) {
                     Text(if (isGerman) "Zurücksetzen" else "Reset Defaults")
+                }
+            }
+        }
+    }
+
+    // Fullscreen Interactive Calibrator so the user can slide the vertical pill directly next to their physical power button
+    if (showFullScreenCalibrator) {
+        Dialog(
+            onDismissRequest = { showFullScreenCalibrator = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false
+            )
+        ) {
+            var fullScreenHeightPx by remember {
+                mutableIntStateOf(context.resources.displayMetrics.heightPixels.coerceAtLeast(1))
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xE607090E))
+                    .onSizeChanged { fullScreenHeightPx = it.height.coerceAtLeast(1) }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val newFrac = (settings.bubbleVerticalFraction + (dragAmount.y / fullScreenHeightPx.toFloat()))
+                                .coerceIn(0.04f, 0.88f)
+                            var newEdge = settings.bubbleEdge
+                            if (dragAmount.x < -36f && settings.bubbleEdge == BubbleEdge.RIGHT) {
+                                newEdge = BubbleEdge.LEFT
+                            } else if (dragAmount.x > 36f && settings.bubbleEdge == BubbleEdge.LEFT) {
+                                newEdge = BubbleEdge.RIGHT
+                            }
+                            LunaSettingsRepository.update(context) {
+                                it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
+                            }
+                            LunaOverlayWindowManager.syncWindowPosition(context)
+                        }
+                    }
+            ) {
+                // Center floating control card
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(24.dp),
+                    tonalElevation = 8.dp,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 36.dp)
+                        .widthIn(max = 340.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = if (isGerman) "Power-Tasten-Kalibrierung" else "Power Button Calibration",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (isGerman) {
+                                "Ziehe die Pill am Bildschirmrand genau auf die Höhe deiner physischen Power-Taste."
+                            } else {
+                                "Drag the pill along the screen edge to match the exact height of your physical power button."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            val labels = if (isGerman) {
+                                listOf("Hören", "Denken", "Sprechen")
+                            } else {
+                                listOf("Listen", "Think", "Speak")
+                            }
+                            labels.forEachIndexed { idx, label ->
+                                SegmentedButton(
+                                    selected = previewMode == idx,
+                                    onClick = { previewMode = idx },
+                                    shape = SegmentedButtonDefaults.itemShape(index = idx, count = labels.size)
+                                ) {
+                                    Text(label, maxLines = 1)
+                                }
+                            }
+                        }
+
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            listOf(BubbleEdge.LEFT, BubbleEdge.RIGHT).forEachIndexed { idx, edge ->
+                                SegmentedButton(
+                                    selected = settings.bubbleEdge == edge,
+                                    onClick = {
+                                        LunaSettingsRepository.update(context) { it.copy(bubbleEdge = edge) }
+                                        LunaOverlayWindowManager.syncWindowPosition(context)
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(index = idx, count = 2)
+                                ) {
+                                    Text(
+                                        text = if (edge == BubbleEdge.LEFT) {
+                                            if (isGerman) "Linker Rand" else "Left Edge"
+                                        } else {
+                                            if (isGerman) "Rechter Rand" else "Right Edge"
+                                        },
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+
+                        SliderSettingRow(
+                            label = if (isGerman) "Höhe" else "Height Position",
+                            valueText = "${(settings.bubbleVerticalFraction * 100).roundToInt()}%",
+                            value = settings.bubbleVerticalFraction,
+                            valueRange = 0.04f..0.88f,
+                            onValueChange = { v ->
+                                LunaSettingsRepository.update(context) { it.copy(bubbleVerticalFraction = v) }
+                                LunaOverlayWindowManager.syncWindowPosition(context)
+                            }
+                        )
+
+                        SliderSettingRow(
+                            label = if (isGerman) "Größe" else "Scale",
+                            valueText = "${(settings.bubbleScale * 100).roundToInt()}%",
+                            value = settings.bubbleScale,
+                            valueRange = 0.75f..1.35f,
+                            onValueChange = { v ->
+                                LunaSettingsRepository.update(context) { it.copy(bubbleScale = v) }
+                            }
+                        )
+
+                        Button(
+                            onClick = { showFullScreenCalibrator = false },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (isGerman) "Fertig" else "Done")
+                        }
+                    }
+                }
+
+                // Actual Vertical Side-Notch rendered at the exact real-world screen Y coordinate
+                val realYOffsetPx = (fullScreenHeightPx * settings.bubbleVerticalFraction).roundToInt()
+                val edgeAlign = if (settings.bubbleEdge == BubbleEdge.LEFT) {
+                    Alignment.TopStart
+                } else {
+                    Alignment.TopEnd
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(edgeAlign)
+                        .offset { IntOffset(0, realYOffsetPx) }
+                ) {
+                    GeminiSidePillOverlay(
+                        liveState = previewState,
+                        settings = settings,
+                        micRms = 0.58f,
+                        waveBands = floatArrayOf(0.35f, 0.65f, 0.88f, 0.60f, 0.40f),
+                        ttsRms = 0.62f,
+                        isSpeaking = previewMode == 2,
+                        onDragDelta = { dx, dy ->
+                            val newFrac = (settings.bubbleVerticalFraction + (dy / fullScreenHeightPx.toFloat()))
+                                .coerceIn(0.04f, 0.88f)
+                            var newEdge = settings.bubbleEdge
+                            if (dx < -40f && settings.bubbleEdge == BubbleEdge.RIGHT) {
+                                newEdge = BubbleEdge.LEFT
+                            } else if (dx > 40f && settings.bubbleEdge == BubbleEdge.LEFT) {
+                                newEdge = BubbleEdge.RIGHT
+                            }
+                            LunaSettingsRepository.update(context) {
+                                it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
+                            }
+                            LunaOverlayWindowManager.syncWindowPosition(context)
+                        },
+                        onToggleExpand = {
+                            previewMode = (previewMode + 1) % 3
+                        },
+                        onDismiss = {}
+                    )
                 }
             }
         }

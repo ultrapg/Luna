@@ -519,12 +519,21 @@ class LunaTtsEngine private constructor(context: Context) {
 
     private fun stripMarkdownForSpeech(raw: String): String {
         return raw
+            .replace(Regex("(?i)<think>[\\s\\S]*?</think>"), " ")
+            .replace(Regex("(?i)<thinking>[\\s\\S]*?</thinking>"), " ")
+            .replace(Regex("(?i)<thought>[\\s\\S]*?</thought>"), " ")
+            .replace(Regex("(?i)<think>[\\s\\S]*$"), " ")
+            .replace(Regex("(?i)<thinking>[\\s\\S]*$"), " ")
             .replace(Regex("```[\\s\\S]*?```"), " ")
             .replace(Regex("`([^`]+)`"), "$1")
             .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
             .replace(Regex("\\*([^*]+)\\*"), "$1")
             .replace(Regex("#+\\s*"), "")
             .replace(Regex("\\[([^]]+)]\\([^)]+\\)"), "$1")
+            .replace(Regex("https?://\\S+"), "")
+            .replace(Regex("\\|[-:\\s|]+\\|"), " ")
+            .replace(Regex("\\|"), ", ")
+            .replace(Regex("(?m)^\\s*[-*•]+\\s+"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
     }

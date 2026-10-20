@@ -29,8 +29,10 @@ enum class AppLanguage(val code: String, val labelEn: String, val labelDe: Strin
             ENGLISH -> "en"
             GERMAN -> "de"
             AUTO -> {
-                val sys = Locale.getDefault().language.lowercase(Locale.ROOT)
-                if (sys.startsWith("de")) "de" else "en"
+                val sys = runCatching {
+                    android.content.res.Resources.getSystem().configuration.locales.get(0).language
+                }.getOrNull()?.ifBlank { null } ?: Locale.getDefault().language
+                if (sys.lowercase(Locale.ROOT).startsWith("de")) "de" else "en"
             }
         }
     }
@@ -182,22 +184,11 @@ data class LunaSettings(
     // Hardware Acceleration (prefers NPU by default as requested)
     val hardwareAccelerator: HardwareAccelerator = HardwareAccelerator.NPU,
 
-    // OpenAI-Compatible API Settings
-    val openAiBaseUrl: String = "https://api.openai.com/v1",
+    // OpenAI-Compatible API Settings (Empty by default as requested)
+    val openAiBaseUrl: String = "",
     val openAiApiKey: String = "",
-    val openAiModel: String = "gpt-4o-mini",
-    val availableModels: List<String> = listOf(
-        "gpt-4o-mini",
-        "gpt-4o",
-        "gpt-4.1",
-        "gpt-4.1-mini",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "claude-3-7-sonnet",
-        "deepseek-chat",
-        "qwen-2.5-72b-instruct",
-        "llama-3.3-70b-instruct"
-    ),
+    val openAiModel: String = "",
+    val availableModels: List<String> = emptyList(),
     val temperature: Float = 0.6f,
     val maxTokens: Int = 2048,
     val customSystemPrompt: String = "",
@@ -278,7 +269,7 @@ object LunaSettingsRepository {
 
     private fun loadFromPrefs(context: Context): LunaSettings {
         val p = getPrefs(context)
-        val modelsJson = p.getString("available_models", null)
+        val modelsJson = p.getString("available_models_v4", null)
         val parsedModels = if (!modelsJson.isNullOrBlank()) {
             runCatching {
                 val arr = JSONArray(modelsJson)
@@ -288,9 +279,9 @@ object LunaSettingsRepository {
                         if (m.isNotEmpty()) add(m)
                     }
                 }
-            }.getOrNull() ?: LunaSettings().availableModels
+            }.getOrNull() ?: emptyList()
         } else {
-            LunaSettings().availableModels
+            emptyList()
         }
 
         val mcpJson = p.getString("mcp_servers", null)
@@ -317,11 +308,11 @@ object LunaSettingsRepository {
         }
 
         return LunaSettings(
-            appLanguage = AppLanguage.fromCode(p.getString("app_language", AppLanguage.AUTO.code)),
+            appLanguage = AppLanguage.fromCode(p.getString("app_language_v4", AppLanguage.AUTO.code)),
             hardwareAccelerator = HardwareAccelerator.fromId(p.getString("hardware_accelerator", HardwareAccelerator.NPU.id)),
-            openAiBaseUrl = p.getString("openai_base_url", "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
+            openAiBaseUrl = p.getString("openai_base_url_v4", "") ?: "",
             openAiApiKey = p.getString("openai_api_key", "") ?: "",
-            openAiModel = p.getString("openai_model", "gpt-4o-mini") ?: "gpt-4o-mini",
+            openAiModel = p.getString("openai_model_v4", "") ?: "",
             availableModels = parsedModels,
             temperature = p.getFloat("temperature", 0.6f),
             maxTokens = p.getInt("max_tokens", 2048),
@@ -383,12 +374,12 @@ object LunaSettingsRepository {
         }
 
         getPrefs(context).edit()
-            .putString("app_language", s.appLanguage.code)
+            .putString("app_language_v4", s.appLanguage.code)
             .putString("hardware_accelerator", s.hardwareAccelerator.id)
-            .putString("openai_base_url", s.openAiBaseUrl.trim())
+            .putString("openai_base_url_v4", s.openAiBaseUrl.trim())
             .putString("openai_api_key", s.openAiApiKey.trim())
-            .putString("openai_model", s.openAiModel.trim())
-            .putString("available_models", modelsArr.toString())
+            .putString("openai_model_v4", s.openAiModel.trim())
+            .putString("available_models_v4", modelsArr.toString())
             .putFloat("temperature", s.temperature)
             .putInt("max_tokens", s.maxTokens)
             .putString("custom_system_prompt", s.customSystemPrompt)

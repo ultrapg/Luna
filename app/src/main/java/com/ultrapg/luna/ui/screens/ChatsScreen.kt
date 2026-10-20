@@ -135,8 +135,11 @@ fun ChatsScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val modelLabel = settings.openAiModel.ifBlank {
+                        if (isGerman) "Kein Modell" else "No model"
+                    }
                     Text(
-                        text = "${settings.openAiModel} • ${settings.hardwareAccelerator.shortLabel}",
+                        text = "$modelLabel • ${settings.hardwareAccelerator.shortLabel}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

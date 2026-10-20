@@ -121,18 +121,18 @@ object OpenAiAgentEngine {
     ): AgentCompletionResult = withContext(Dispatchers.IO) {
         val settings = LunaSettingsRepository.current(context)
         val cleanBase = normalizeBaseUrl(settings.openAiBaseUrl)
-        val modelId = settings.openAiModel.trim().ifBlank { "gpt-4o-mini" }
+        val modelId = settings.openAiModel.trim()
 
-        if (cleanBase.isBlank()) {
+        if (cleanBase.isBlank() || modelId.isBlank()) {
             val isDe = settings.appLanguage.isGerman
             return@withContext AgentCompletionResult(
                 replyText = if (isDe) {
-                    "Bitte konfiguriere zuerst deine OpenAI-kompatible Base-URL und deinen API-Key in den Luna-Einstellungen."
+                    "Bitte trage zuerst deine Base-URL, deinen API-Key und dein Modell im KI-Tab ein."
                 } else {
-                    "Please configure your OpenAI-compatible Base URL and API Key in Luna Settings first."
+                    "Please enter your Base URL, API Key, and Model in the AI tab first."
                 },
                 executedToolsSummary = emptyList(),
-                modelUsed = modelId
+                modelUsed = modelId.ifBlank { "unconfigured" }
             )
         }
 
@@ -243,9 +243,24 @@ object OpenAiAgentEngine {
                 continue
             }
 
-            val finalContent = messageObj.optString("content", "").trim()
+            val rawContent = messageObj.optString("content", "").trim()
+            val apiReasoning = messageObj.optString("reasoning_content", "")
+                .ifBlank { messageObj.optString("reasoning", "") }
+                .ifBlank { messageObj.optString("thought", "") }
+                .trim()
+
+            val hadInlineThink = rawContent.contains("<think", ignoreCase = true)
+            val cleanReply = stripThinkingBlocks(rawContent)
+
+            if (apiReasoning.isNotBlank() || hadInlineThink) {
+                val thinkBadge = if (settings.appLanguage.isGerman) "Gedacht" else "Thought"
+                if (!executedTools.contains(thinkBadge)) {
+                    executedTools.add(0, thinkBadge)
+                }
+            }
+
             return@withContext AgentCompletionResult(
-                replyText = finalContent.ifBlank {
+                replyText = cleanReply.ifBlank {
                     if (settings.appLanguage.isGerman) "Erledigt." else "Done."
                 },
                 executedToolsSummary = executedTools,
@@ -298,17 +313,32 @@ object OpenAiAgentEngine {
         }
     }
 
+    /**
+     * Strips `<think>...</think>` and `<thinking>...</thinking>` blocks from reasoning models
+     * so internal chain-of-thought is never spoken aloud by TTS.
+     */
+    fun stripThinkingBlocks(raw: String): String {
+        return raw
+            .replace(Regex("(?i)<think>[\\s\\S]*?</think>"), "")
+            .replace(Regex("(?i)<thinking>[\\s\\S]*?</thinking>"), "")
+            .replace(Regex("(?i)<thought>[\\s\\S]*?</thought>"), "")
+            .replace(Regex("(?i)<think>[\\s\\S]*$"), "")
+            .replace(Regex("(?i)<thinking>[\\s\\S]*$"), "")
+            .trim()
+    }
+
     private fun buildSystemPrompt(
         settings: LunaSettings,
         memoriesList: List<String>,
         detectedLanguage: String?
     ): String {
         val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm z (EEEE)", Locale.getDefault()).format(Date())
+        val isDeviceGerman = settings.appLanguage.isGerman
         val langHint = when {
-            detectedLanguage == "de" || settings.appLanguage.isGerman ->
-                "Respond in natural, concise German (Deutsch) unless the user explicitly speaks another language."
+            detectedLanguage == "de" || isDeviceGerman ->
+                "Default language: German (Deutsch). Always respond in natural, fluent German unless the user explicitly speaks another language."
             else ->
-                "Respond in the same language the user speaks (supporting both English and German / Deutsch seamlessly). Keep voice responses concise, warm, and natural."
+                "Default language: English. Respond in the user's language (defaulting to the device language). Keep responses concise, warm, and natural."
         }
 
         val memoryBlock = if (memoriesList.isNotEmpty()) {
@@ -324,14 +354,21 @@ object OpenAiAgentEngine {
         }
 
         return """
-            You are **Luna**, a fast, intelligent, native Android Digital Assistant triggered via the phone's side button.
+            You are Luna, a fast, intelligent, native Android Digital Assistant triggered via the phone's side button.
             Current local time on phone: $nowStr.
             $langHint
             
+            ### STRICT VOICE / TTS OUTPUT RULES (FLOW TEXT ONLY):
+            - Your response is spoken aloud directly by a neural Text-to-Speech (TTS) engine.
+            - Write ONLY in smooth, natural, conversational flow text (Fließtext / full spoken sentences).
+            - NEVER use Markdown tables, bullet points, numbered lists, headers (#), bold/italic asterisks (*), code blocks, or URLs.
+            - Summarize comparisons, lists, or data into natural spoken sentences that are easy to listen to.
+            - If you use internal thinking (<think>...</think>), keep all reasoning inside <think>...</think> and put only the final spoken flow-text answer outside.
+            
+            ### TOOLS & CAPABILITIES:
             You have direct access to Android hardware & system actions (`set_flashlight`, `open_app`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`), Web Grounding (`search_duckduckgo`, `read_website`), Persistent Memory (`save_memory`, `recall_memories`, `forget_memory`), and connected MCP tools.
-            - When the user asks to turn on/off the flashlight (or "Taschenlampe an/aus"), open an app, set an alarm/timer, or change volume, immediately invoke the corresponding tool.
+            - When the user asks to turn on/off the flashlight ("Taschenlampe an/aus"), open an app, set an alarm/timer, or change volume, immediately invoke the corresponding tool.
             - When the user asks about current events, facts, prices, or websites, use `search_duckduckgo` and/or `read_website` to ground your answer accurately.
-            - Keep answers clear and conversational so they sound great when spoken aloud by Luna's female neural TTS voice.
             $memoryBlock$customExtra
         """.trimIndent()
     }

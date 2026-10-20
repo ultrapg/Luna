@@ -25,17 +25,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -62,19 +56,16 @@ import kotlin.math.sin
 
 private val NotchDarkBg = Color(0xF5111318)
 private val NotchSubtleBorder = Color(0xFF282C37)
-private val AccentDotBlue = Color(0xFF7AA2F7)
-private val AccentDotGreen = Color(0xFF4ADE80)
-private val AccentDotAmber = Color(0xFFFBBF24)
+private val ListeningWhite = Color(0xFFE8EAED)
+private val SpeakingLightBlue = Color(0xFF7DC4FF)
 
 /**
  * Slim Vertical Side-Notch Bubble Overlay:
  * - Tall and slim (`~34dp x 136dp`), snapped flush against the left or right screen edge like a hardware side-button notch
- * - Zero text and zero obvious buttons inside:
- *   - Tap anywhere on the bubble while listening -> immediately sends & processes speech
- *   - Tap while speaking -> stops TTS and dismisses
- *   - Tap while idle -> starts listening
- *   - Tapping anywhere outside the bubble on the screen immediately dismisses the bubble & stops the assistant
- *   - Drag vertically or horizontally -> moves along the screen edge and dynamically snaps to Left or Right edge
+ * - No status dot, no text, and no obvious buttons inside:
+ *   - Listening: clean white vertical equalizer bars (`ListeningWhite`)
+ *   - Thinking / Transcribing: white stretched pill-shaped loading symbol (`StretchedPillLoadingIndicator`)
+ *   - Speaking: light-blue vertical equalizer visualizer bars (`SpeakingLightBlue`)
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -91,11 +82,15 @@ fun GeminiSidePillOverlay(
 ) {
     val context = LocalContext.current
 
-    val rawLevel = when (liveState.phase) {
-        AssistantOverlayPhase.LISTENING -> max(micRms, 0.16f)
-        AssistantOverlayPhase.SPEAKING -> if (isSpeaking) max(ttsRms, 0.24f) else 0.06f
-        AssistantOverlayPhase.THINKING, AssistantOverlayPhase.TRANSCRIBING -> 0.42f
-        else -> if (isSpeaking) max(ttsRms, 0.24f) else 0.06f
+    val isThinking = liveState.phase == AssistantOverlayPhase.THINKING ||
+        liveState.phase == AssistantOverlayPhase.TRANSCRIBING
+    val isSpeakingNow = liveState.phase == AssistantOverlayPhase.SPEAKING || isSpeaking
+
+    val rawLevel = when {
+        liveState.phase == AssistantOverlayPhase.LISTENING -> max(micRms, 0.16f)
+        isSpeakingNow -> max(ttsRms, 0.24f)
+        isThinking -> 0.40f
+        else -> 0.06f
     }
 
     val smoothedAudio by animateFloatAsState(
@@ -113,6 +108,16 @@ fun GeminiSidePillOverlay(
             repeatMode = RepeatMode.Restart
         ),
         label = "wavePhase"
+    )
+
+    val thinkingProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 950, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "thinkingPillProgress"
     )
 
     val scale = settings.bubbleScale.coerceIn(0.70f, 1.40f)
@@ -155,25 +160,8 @@ fun GeminiSidePillOverlay(
         BubbleEdge.FREE -> RoundedCornerShape(percent = 50)
     }
 
-    val isThinking = liveState.phase == AssistantOverlayPhase.THINKING ||
-        liveState.phase == AssistantOverlayPhase.TRANSCRIBING
-
-    val isAnimated = liveState.phase == AssistantOverlayPhase.LISTENING ||
-        isThinking ||
-        isSpeaking
-
-    val statusDotColor = when {
-        liveState.phase == AssistantOverlayPhase.LISTENING -> AccentDotBlue
-        isThinking -> AccentDotAmber
-        isSpeaking -> AccentDotGreen
-        else -> Color(0xFF8E95A5)
-    }
-
-    val barColor = if (isThinking) {
-        Color(0xFFFDE68A)
-    } else {
-        Color(0xFFE8EAED)
-    }
+    val isAnimated = liveState.phase == AssistantOverlayPhase.LISTENING || isSpeakingNow
+    val barColor = if (isSpeakingNow) SpeakingLightBlue else ListeningWhite
 
     Box(
         modifier = Modifier
@@ -205,29 +193,26 @@ fun GeminiSidePillOverlay(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(
-                    top = 10.dp,
-                    bottom = 10.dp,
-                    start = if (settings.bubbleEdge == BubbleEdge.LEFT) 4.dp else 6.dp,
-                    end = if (settings.bubbleEdge == BubbleEdge.RIGHT) 4.dp else 6.dp
-                ),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Box(
+        if (isThinking) {
+            // White stretched pill-shaped loading symbol during thinking/transcribing
+            StretchedPillLoadingIndicator(
                 modifier = Modifier
-                    .size(5.dp)
-                    .clip(CircleShape)
-                    .background(statusDotColor)
+                    .fillMaxSize()
+                    .padding(vertical = 14.dp, horizontal = 6.dp),
+                progress = thinkingProgress,
+                color = ListeningWhite
             )
-            Spacer(modifier = Modifier.height(6.dp))
+        } else {
+            // Equalizer bars: White while listening, Light Blue while speaking
             VerticalEqualizerBars(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxSize()
+                    .padding(
+                        top = 12.dp,
+                        bottom = 12.dp,
+                        start = if (settings.bubbleEdge == BubbleEdge.LEFT) 4.dp else 6.dp,
+                        end = if (settings.bubbleEdge == BubbleEdge.RIGHT) 4.dp else 6.dp
+                    ),
                 barCount = if (isActive) 11 else 7,
                 audioAmplitude = smoothedAudio,
                 waveBands = waveBands,
@@ -236,6 +221,46 @@ fun GeminiSidePillOverlay(
                 barColor = barColor
             )
         }
+    }
+}
+
+/**
+ * White stretched pill-shaped loading symbol for the thinking state.
+ * Smoothly stretches into an elongated capsule in the middle of its travel and contracts at the ends.
+ */
+@Composable
+private fun StretchedPillLoadingIndicator(
+    modifier: Modifier,
+    progress: Float,
+    color: Color
+) {
+    Canvas(modifier = modifier) {
+        val pillWidth = (size.width * 0.42f).coerceIn(5.dp.toPx(), 10.dp.toPx())
+        // Stretch factor peaks in the middle of the travel (progress = 0.5)
+        val stretchFactor = 1f - 2f * abs(progress - 0.5f)
+        val minPillHeight = (size.height * 0.22f).coerceAtLeast(pillWidth * 1.8f)
+        val maxPillHeight = (size.height * 0.58f).coerceAtLeast(minPillHeight)
+        val currentPillHeight = minPillHeight + (maxPillHeight - minPillHeight) * stretchFactor
+
+        val travelSpan = (size.height - currentPillHeight).coerceAtLeast(0f)
+        val topY = travelSpan * progress
+        val leftX = (size.width - pillWidth) / 2f
+
+        // Subtle track pill behind the active stretched pill
+        drawRoundRect(
+            color = color.copy(alpha = 0.16f),
+            topLeft = Offset(leftX, 0f),
+            size = Size(pillWidth, size.height),
+            cornerRadius = CornerRadius(pillWidth / 2f, pillWidth / 2f)
+        )
+
+        // Active white stretched pill
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(leftX, topY),
+            size = Size(pillWidth, currentPillHeight),
+            cornerRadius = CornerRadius(pillWidth / 2f, pillWidth / 2f)
+        )
     }
 }
 
