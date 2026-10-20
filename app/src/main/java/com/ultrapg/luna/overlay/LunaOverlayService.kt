@@ -10,6 +10,7 @@
 
 package com.ultrapg.luna.overlay
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -22,7 +23,9 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.ContextThemeWrapper
@@ -115,6 +118,11 @@ object LunaScreenMetrics {
         val realHeight = getRealScreenHeightPx(context)
         return (realHeight * verticalFraction.coerceIn(0.02f, 0.92f)).toInt()
     }
+
+    fun isDeviceLocked(context: Context): Boolean {
+        val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        return km?.isKeyguardLocked == true
+    }
 }
 
 /**
@@ -124,6 +132,7 @@ object LunaScreenMetrics {
  */
 object LunaOverlayWindowManager {
     private const val TAG = "LunaOverlayWM"
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var rootView: View? = null
     private var windowManager: WindowManager? = null
@@ -132,8 +141,16 @@ object LunaOverlayWindowManager {
     private var horizontalDragAccumPx: Float = 0f
     private var measuredWindowTopInsetPx: Int = 0
 
+    /**
+     * Returns true if a system overlay window can be displayed in the current lock state.
+     * Note: On Android 12–15, `TYPE_APPLICATION_OVERLAY` is hidden behind the Keyguard (Lock Screen),
+     * whereas `TYPE_ACCESSIBILITY_OVERLAY`, `VoiceInteractionSession`, and `showWhenLocked` Activities
+     * are allowed on top of the Lock Screen.
+     */
     fun canShowSystemOverlay(context: Context): Boolean {
-        return LunaAccessibilityService.activeInstance != null || Settings.canDrawOverlays(context)
+        if (LunaAccessibilityService.activeInstance != null) return true
+        if (LunaScreenMetrics.isDeviceLocked(context)) return false
+        return Settings.canDrawOverlays(context)
     }
 
     private fun createVisualWindowContext(baseContext: Context, windowType: Int): Context {
@@ -172,11 +189,14 @@ object LunaOverlayWindowManager {
             0
         }
         lp.y = (targetScreenY - measuredWindowTopInsetPx).coerceAtLeast(0)
+        @Suppress("DEPRECATION")
         lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -188,19 +208,36 @@ object LunaOverlayWindowManager {
 
     @Synchronized
     fun ensureOverlayAttached(context: Context) {
-        if (rootView != null) {
-            syncWindowPosition(context)
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            val appCtx = context.applicationContext
+            mainHandler.post { ensureOverlayAttached(appCtx) }
             return
         }
         val a11yContext = LunaAccessibilityService.activeInstance
         val hasOverlayPerm = Settings.canDrawOverlays(context)
         if (a11yContext == null && !hasOverlayPerm) return
 
-        val windowType = if (a11yContext != null) {
+        val desiredWindowType = if (a11yContext != null) {
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
         } else {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         }
+
+        val existingView = rootView
+        if (existingView != null) {
+            val needsUpgrade = layoutParams?.type != desiredWindowType
+            val isDetached = existingView.parent == null
+            if (needsUpgrade || isDetached) {
+                detachOverlay()
+            } else {
+                existingView.visibility = View.VISIBLE
+                lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+                syncWindowPosition(context)
+                return
+            }
+        }
+
+        val windowType = desiredWindowType
 
         val baseContext: Context = a11yContext ?: context.applicationContext
         val visualContext = if (a11yContext != null) {
@@ -315,6 +352,11 @@ object LunaOverlayWindowManager {
 
     @Synchronized
     fun syncWindowPosition(context: Context) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            val appCtx = context.applicationContext
+            mainHandler.post { syncWindowPosition(appCtx) }
+            return
+        }
         val view = rootView ?: return
         val wm = windowManager ?: return
         val lp = layoutParams ?: return
@@ -372,6 +414,10 @@ object LunaOverlayWindowManager {
 
     @Synchronized
     fun detachOverlay() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { detachOverlay() }
+            return
+        }
         val view = rootView ?: return
         val wm = windowManager
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)

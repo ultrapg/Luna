@@ -92,6 +92,20 @@ private val LightListeningPrimary = Color(0xFF1A1E29)
 private val LightSpeakingBlue = Color(0xFF1B6EF3)
 private val LightSecondaryAccent = Color(0xFF4285F4)
 
+// Retry & Error Red Tokens (works across all 5 designs in both Light and Dark mode)
+private val RetryRedDark = Color(0xFFFF5252)
+private val RetryRedSecondaryDark = Color(0xFFFF8A80)
+private val RetryRedLight = Color(0xFFD32F2F)
+private val RetryRedSecondaryLight = Color(0xFFE53935)
+
+private val ErrorFlashBgDark = Color(0xFAD32F2F)
+private val ErrorFlashBorderDark = Color(0xFFFF8A80)
+private val ErrorFlashInnerDark = Color(0xFFFF5252)
+
+private val ErrorFlashBgLight = Color(0xFAE53935)
+private val ErrorFlashBorderLight = Color(0xFFB71C1C)
+private val ErrorFlashInnerLight = Color(0xFFFF8A80)
+
 private data class PillPalette(
     val containerBg: Color,
     val borderColor: Color,
@@ -272,8 +286,11 @@ fun LunaSidePillOverlay(
     )
 
     val isThinking = liveState.phase == AssistantOverlayPhase.THINKING ||
-        liveState.phase == AssistantOverlayPhase.TRANSCRIBING
-    val isSpeakingNow = liveState.phase == AssistantOverlayPhase.SPEAKING || isSpeaking
+        liveState.phase == AssistantOverlayPhase.TRANSCRIBING ||
+        liveState.isRetrying ||
+        liveState.isErrorFlash
+    val isSpeakingNow = (liveState.phase == AssistantOverlayPhase.SPEAKING || isSpeaking) &&
+        !liveState.isErrorFlash
     val isAnimated = liveState.phase == AssistantOverlayPhase.LISTENING || isSpeakingNow
 
     val rawLevel = when {
@@ -397,20 +414,56 @@ fun LunaSidePillOverlay(
 
     val palette = resolvePillPalette(settings.bubbleStyle, isDark, isSpeakingNow)
 
+    val targetContainerBg = when {
+        liveState.isErrorFlash -> if (isDark) ErrorFlashBgDark else ErrorFlashBgLight
+        else -> palette.containerBg
+    }
+    val targetBorderColor = when {
+        liveState.isErrorFlash -> if (isDark) ErrorFlashBorderDark else ErrorFlashBorderLight
+        liveState.isRetrying -> if (isDark) RetryRedDark.copy(alpha = 0.65f) else RetryRedLight.copy(alpha = 0.65f)
+        else -> palette.borderColor
+    }
+    val targetPrimaryColor = when {
+        liveState.isErrorFlash -> if (isDark) ErrorFlashInnerDark else ErrorFlashInnerLight
+        liveState.isRetrying -> if (isDark) RetryRedDark else RetryRedLight
+        isSpeakingNow -> palette.speakingColor
+        else -> palette.listeningColor
+    }
+    val targetSecondaryColor = when {
+        liveState.isErrorFlash -> if (isDark) ErrorFlashBorderDark else ErrorFlashBorderLight
+        liveState.isRetrying -> if (isDark) RetryRedSecondaryDark else RetryRedSecondaryLight
+        else -> palette.secondaryColor
+    }
+    val targetThinkingColor = when {
+        liveState.isErrorFlash -> if (isDark) ErrorFlashInnerDark else ErrorFlashInnerLight
+        liveState.isRetrying -> if (isDark) RetryRedDark else RetryRedLight
+        else -> palette.listeningColor
+    }
+
     val bgColor by animateColorAsState(
-        targetValue = palette.containerBg,
-        animationSpec = tween(durationMillis = 220),
+        targetValue = targetContainerBg,
+        animationSpec = tween(durationMillis = 180),
         label = "pillBgColor"
     )
     val borderColor by animateColorAsState(
-        targetValue = palette.borderColor,
-        animationSpec = tween(durationMillis = 220),
+        targetValue = targetBorderColor,
+        animationSpec = tween(durationMillis = 180),
         label = "pillBorderColor"
     )
     val activeAccentColor by animateColorAsState(
-        targetValue = if (isSpeakingNow) palette.speakingColor else palette.listeningColor,
+        targetValue = targetPrimaryColor,
         animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
         label = "barColorTransition"
+    )
+    val activeSecondaryColor by animateColorAsState(
+        targetValue = targetSecondaryColor,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "secondaryColorTransition"
+    )
+    val activeThinkingColor by animateColorAsState(
+        targetValue = targetThinkingColor,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "thinkingColorTransition"
     )
 
     val edgeOrigin = when (settings.bubbleEdge) {
@@ -480,9 +533,9 @@ fun LunaSidePillOverlay(
             phase = phase,
             thinkingProgress = thinkingProgress,
             primaryColor = activeAccentColor,
-            secondaryColor = palette.secondaryColor,
-            listeningColor = palette.listeningColor,
-            trackAlpha = palette.trackAlpha
+            secondaryColor = activeSecondaryColor,
+            listeningColor = activeThinkingColor,
+            trackAlpha = if (liveState.isErrorFlash) 0.45f else palette.trackAlpha
         )
     }
 }

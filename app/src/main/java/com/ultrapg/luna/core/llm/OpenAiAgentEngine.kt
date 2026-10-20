@@ -21,10 +21,12 @@ import com.ultrapg.luna.core.settings.LunaSettings
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.settings.ThinkingEffort
 import com.ultrapg.luna.core.tools.LunaAgentTools
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -165,12 +167,13 @@ data class AgentCompletionResult(
  */
 object OpenAiAgentEngine {
     private const val MAX_AGENT_STEPS = 12
+    private const val MAX_PROVIDER_RETRIES = 5
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -225,7 +228,8 @@ object OpenAiAgentEngine {
         userPrompt: String,
         detectedLanguage: String? = null,
         onToolStep: ((AgentStepEvent) -> Unit)? = null,
-        onLiveTraceUpdated: ((List<ToolExecutionRecord>, String) -> Unit)? = null
+        onLiveTraceUpdated: ((List<ToolExecutionRecord>, String) -> Unit)? = null,
+        onRetryStateChanged: ((Boolean, Int) -> Unit)? = null
     ): AgentCompletionResult = withContext(Dispatchers.IO) {
         val settings = LunaSettingsRepository.current(context)
         val isDe = settings.appLanguage.isGerman
@@ -233,16 +237,12 @@ object OpenAiAgentEngine {
         val modelId = settings.openAiModel.trim()
 
         if (cleanBase.isBlank() || modelId.isBlank()) {
-            return@withContext AgentCompletionResult(
-                replyText = if (isDe) {
+            throw IOException(
+                if (isDe) {
                     "Bitte trage zuerst deine Base-URL, deinen API-Key und dein Modell im KI-Tab ein."
                 } else {
                     "Please enter your Base URL, API Key, and Model in the AI tab first."
-                },
-                executedToolsSummary = emptyList(),
-                toolRecords = emptyList(),
-                encodedToolCallsSummary = "",
-                modelUsed = modelId.ifBlank { "unconfigured" }
+                }
             )
         }
 
@@ -339,29 +339,72 @@ object OpenAiAgentEngine {
             }
 
             val llmStepStartMs = SystemClock.elapsedRealtime()
-            val responseJson = try {
-                postChatCompletion(cleanBase, settings.openAiApiKey, payload)
-            } catch (e: ToolNotSupportedHttpException) {
-                if (useThinkingParam && e.message?.lowercase(Locale.ROOT)?.contains("reasoning") == true) {
-                    useThinkingParam = false
-                    payload.remove("reasoning_effort")
-                    postChatCompletion(cleanBase, settings.openAiApiKey, payload)
-                } else if (useToolsInRequest) {
-                    useToolsInRequest = false
-                    payload.remove("tools")
-                    payload.remove("tool_choice")
-                    postChatCompletion(cleanBase, settings.openAiApiKey, payload)
-                } else if (useThinkingParam) {
-                    useThinkingParam = false
-                    payload.remove("reasoning_effort")
-                    postChatCompletion(cleanBase, settings.openAiApiKey, payload)
-                } else {
-                    throw e
+            var responseJson: JSONObject? = null
+            var lastError: Throwable? = null
+
+            for (attempt in 0..MAX_PROVIDER_RETRIES) {
+                try {
+                    val candidate = try {
+                        postChatCompletion(cleanBase, settings.openAiApiKey, payload)
+                    } catch (e: ToolNotSupportedHttpException) {
+                        if (useThinkingParam && e.message?.lowercase(Locale.ROOT)?.contains("reasoning") == true) {
+                            useThinkingParam = false
+                            payload.remove("reasoning_effort")
+                            postChatCompletion(cleanBase, settings.openAiApiKey, payload)
+                        } else if (useToolsInRequest) {
+                            useToolsInRequest = false
+                            payload.remove("tools")
+                            payload.remove("tool_choice")
+                            postChatCompletion(cleanBase, settings.openAiApiKey, payload)
+                        } else if (useThinkingParam) {
+                            useThinkingParam = false
+                            payload.remove("reasoning_effort")
+                            postChatCompletion(cleanBase, settings.openAiApiKey, payload)
+                        } else {
+                            throw e
+                        }
+                    }
+
+                    val testChoice = candidate.optJSONArray("choices")?.optJSONObject(0)
+                        ?: throw IOException("Empty choices in API response")
+                    if (testChoice.optJSONObject("message") == null) {
+                        throw IOException("Missing message in API response")
+                    }
+
+                    responseJson = candidate
+                    if (attempt > 0) {
+                        onRetryStateChanged?.invoke(false, 0)
+                    }
+                    break
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (t: Throwable) {
+                    lastError = t
+                    if (attempt < MAX_PROVIDER_RETRIES) {
+                        val retryNum = attempt + 1
+                        onRetryStateChanged?.invoke(true, retryNum)
+                        onToolStep?.invoke(
+                            AgentStepEvent(
+                                toolName = "retry",
+                                statusText = if (isDe) {
+                                    "Anbieter antwortet nicht – Versuch $retryNum/$MAX_PROVIDER_RETRIES..."
+                                } else {
+                                    "Provider not responding – Retry $retryNum/$MAX_PROVIDER_RETRIES..."
+                                }
+                            )
+                        )
+                        delay(900L)
+                    } else {
+                        onRetryStateChanged?.invoke(false, MAX_PROVIDER_RETRIES)
+                        throw t
+                    }
                 }
             }
+
+            val validResponseJson = responseJson ?: throw (lastError ?: IOException("Provider did not respond"))
             val llmStepElapsedMs = (SystemClock.elapsedRealtime() - llmStepStartMs).coerceAtLeast(1L)
 
-            val choice = responseJson.optJSONArray("choices")?.optJSONObject(0)
+            val choice = validResponseJson.optJSONArray("choices")?.optJSONObject(0)
                 ?: throw IOException("Empty choices in API response")
             val messageObj = choice.optJSONObject("message")
                 ?: throw IOException("Missing message in API response")
@@ -378,7 +421,7 @@ object OpenAiAgentEngine {
             // 2. Capture any API Built-In MCP / server-executed tools returned directly in the response
             if (settings.apiBuiltInMcpEnabled) {
                 val serverExecutedRecords = extractServerSideExecutedTools(
-                    responseJson = responseJson,
+                    responseJson = validResponseJson,
                     choiceObj = choice,
                     messageObj = messageObj,
                     startingStepIndex = toolRecords.size + 1,

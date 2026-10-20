@@ -332,7 +332,12 @@ object LunaSettingsRepository {
     }
 
     private fun getPrefs(context: Context): SharedPreferences {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return runCatching {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        }.getOrElse {
+            context.createDeviceProtectedStorageContext()
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        }
     }
 
     private fun loadFromPrefs(context: Context): LunaSettings {

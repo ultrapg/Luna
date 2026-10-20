@@ -140,17 +140,19 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
         @Volatile
         private var activeSession: LunaVoiceInteractionSession? = null
 
-        fun ensureSessionShownForActiveTurn() {
-            val session = activeSession ?: return
+        fun ensureSessionShownForActiveTurn(): Boolean {
+            val session = activeSession ?: return false
             val state = LunaAssistantController.liveState.value
             if (state.isVisible && !state.isDismissing) {
-                runCatching {
+                return runCatching {
                     val args = Bundle().apply {
                         putBoolean(EXTRA_RESUME_ACTIVE_TURN, true)
                     }
                     session.show(args, 0)
-                }
+                    true
+                }.getOrDefault(false)
             }
+            return false
         }
     }
 
@@ -158,9 +160,8 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
     private var lifecycleOwner: ComposeOverlayLifecycleOwner? = null
     private var horizontalDragAccumPx: Float = 0f
 
-    override fun onCreate() {
-        super.onCreate()
-        activeSession = this
+    @Suppress("DEPRECATION")
+    private fun configureSessionWindowForLockScreen() {
         window?.window?.let { win ->
             win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             val params = win.attributes
@@ -170,7 +171,10 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
                 or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS) and
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) and
                 WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
             params.dimAmount = 0f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -181,6 +185,12 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
             }
             win.attributes = params
         }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        activeSession = this
+        configureSessionWindowForLockScreen()
     }
 
     override fun onCreateContentView(): View {
@@ -345,6 +355,7 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        configureSessionWindowForLockScreen()
         val isResumingTurn = args?.getBoolean(EXTRA_RESUME_ACTIVE_TURN, false) == true
         if (LunaOverlayWindowManager.canShowSystemOverlay(context)) {
             if (isResumingTurn) {
@@ -389,10 +400,18 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
  *   directly in its own transparent window anchored to the side edge so the side button always works!
  */
 class AssistTrampolineActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_LOCK_SCREEN_HOST_ONLY = "lock_screen_host_only"
+    }
+
     private var horizontalDragAccumPx: Float = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
 
@@ -404,13 +423,14 @@ class AssistTrampolineActivity : ComponentActivity() {
             return
         }
 
-        // Fallback when SYSTEM_ALERT_WINDOW is not granted yet:
-        // Configure this Activity's window as a non-touch-modal side-edge notch window
+        // Fallback when SYSTEM_ALERT_WINDOW is not granted yet OR when on the Lock Screen:
+        // Configure this Activity's window as a non-touch-modal side-edge notch window over the Lock Screen
         val settings = LunaSettingsRepository.current(this)
         val screenHeight = LunaScreenMetrics.getRealScreenHeightPx(this)
         val density = resources.displayMetrics.density.coerceAtLeast(1f)
 
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        @Suppress("DEPRECATION")
         window.attributes = window.attributes.apply {
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
@@ -426,7 +446,10 @@ class AssistTrampolineActivity : ComponentActivity() {
                 or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS) and
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) and
                 WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
             dimAmount = 0f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -506,7 +529,10 @@ class AssistTrampolineActivity : ComponentActivity() {
         }
 
         setContentView(composeView)
-        LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
+        val hostOnly = intent?.getBooleanExtra(EXTRA_LOCK_SCREEN_HOST_ONLY, false) == true
+        if (!hostOnly) {
+            LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent?): Boolean {
@@ -521,10 +547,13 @@ class AssistTrampolineActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val hostOnly = intent.getBooleanExtra(EXTRA_LOCK_SCREEN_HOST_ONLY, false)
         if (LunaOverlayWindowManager.canShowSystemOverlay(this)) {
-            LunaOverlayService.startOrTrigger(this, startListening = true)
+            if (!hostOnly) {
+                LunaOverlayService.startOrTrigger(this, startListening = true)
+            }
             finish()
-        } else {
+        } else if (!hostOnly) {
             LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
         }
     }

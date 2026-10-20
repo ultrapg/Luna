@@ -11,6 +11,8 @@
 package com.ultrapg.luna.assistant
 
 import android.content.Context
+import android.content.Intent
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.Vibrator
 import android.util.Log
@@ -24,6 +26,8 @@ import com.ultrapg.luna.core.speech.LunaAudioRecorder
 import com.ultrapg.luna.core.speech.LunaSpeechPipeline
 import com.ultrapg.luna.core.speech.LunaTtsEngine
 import com.ultrapg.luna.overlay.LunaOverlayWindowManager
+import com.ultrapg.luna.overlay.LunaScreenMetrics
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +59,10 @@ data class AssistantLiveState(
     val executedTools: List<String> = emptyList(),
     val activeTurnSteps: List<ToolExecutionRecord> = emptyList(),
     val activeThinkingText: String = "",
-    val detectedLanguage: String = "en"
+    val detectedLanguage: String = "en",
+    val isRetrying: Boolean = false,
+    val retryAttempt: Int = 0,
+    val isErrorFlash: Boolean = false
 )
 
 /**
@@ -153,7 +160,10 @@ object LunaAssistantController {
             phase = AssistantOverlayPhase.IDLE_NOTCH,
             statusBadge = "",
             activeTurnSteps = emptyList(),
-            activeThinkingText = ""
+            activeThinkingText = "",
+            isRetrying = false,
+            retryAttempt = 0,
+            isErrorFlash = false
         )
     }
 
@@ -161,6 +171,7 @@ object LunaAssistantController {
         val appContext = context.applicationContext
         LunaSettingsRepository.init(appContext)
         val settings = LunaSettingsRepository.current(appContext)
+        wakeScreenIfNeeded(appContext)
         hapticPulse(appContext)
 
         dismissAnimationJob?.cancel()
@@ -200,11 +211,44 @@ object LunaAssistantController {
             userTranscript = "",
             assistantReply = "",
             statusBadge = "",
-            executedTools = emptyList()
+            executedTools = emptyList(),
+            isRetrying = false,
+            retryAttempt = 0,
+            isErrorFlash = false
         )
+
+        ensureBubbleVisibleAcrossScreensAndLockScreen(appContext)
 
         if (startListeningImmediately) {
             startVoiceListening(appContext, showOverlay = true)
+        }
+    }
+
+    /**
+     * Ensures the side-notch bubble is visibly attached whether the phone is unlocked or on the Lock Screen.
+     */
+    fun ensureBubbleVisibleAcrossScreensAndLockScreen(context: Context) {
+        val appContext = context.applicationContext
+        if (LunaOverlayWindowManager.canShowSystemOverlay(appContext)) {
+            LunaOverlayWindowManager.ensureOverlayAttached(appContext)
+            LunaOverlayWindowManager.syncWindowPosition(appContext)
+        } else if (LunaScreenMetrics.isDeviceLocked(appContext)) {
+            if (!LunaVoiceInteractionSession.ensureSessionShownForActiveTurn()) {
+                runCatching {
+                    appContext.startActivity(
+                        Intent(appContext, AssistTrampolineActivity::class.java).apply {
+                            addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            )
+                            putExtra(AssistTrampolineActivity.EXTRA_LOCK_SCREEN_HOST_ONLY, true)
+                        }
+                    )
+                }
+            }
+        } else {
+            LunaVoiceInteractionSession.ensureSessionShownForActiveTurn()
         }
     }
 
@@ -241,7 +285,10 @@ object LunaAssistantController {
                 isDismissing = false,
                 isExpanded = false,
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
-                statusBadge = ""
+                statusBadge = "",
+                isRetrying = false,
+                retryAttempt = 0,
+                isErrorFlash = false
             )
             return
         }
@@ -256,7 +303,10 @@ object LunaAssistantController {
             isDismissing = true,
             isExpanded = false,
             phase = AssistantOverlayPhase.IDLE_NOTCH,
-            statusBadge = ""
+            statusBadge = "",
+            isRetrying = false,
+            retryAttempt = 0,
+            isErrorFlash = false
         )
         dismissAnimationJob?.cancel()
         dismissAnimationJob = scope.launch {
@@ -266,7 +316,10 @@ object LunaAssistantController {
                 isDismissing = false,
                 isExpanded = false,
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
-                statusBadge = ""
+                statusBadge = "",
+                isRetrying = false,
+                retryAttempt = 0,
+                isErrorFlash = false
             )
             LunaOverlayWindowManager.detachOverlay()
         }
@@ -489,10 +542,19 @@ object LunaAssistantController {
                         activeTurnSteps = steps,
                         activeThinkingText = thinkingText
                     )
+                },
+                onRetryStateChanged = { retrying, attempt ->
+                    _liveState.value = _liveState.value.copy(
+                        isRetrying = retrying,
+                        retryAttempt = attempt,
+                        isErrorFlash = false
+                    )
                 }
             )
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (t: Throwable) {
-            Log.e(TAG, "Agent turn failed: ${t.message}", t)
+            Log.e(TAG, "Agent turn failed after 5 retries: ${t.message}", t)
             val errReply = t.message ?: "Error communicating with OpenAI API."
             chatDao.insertMessage(
                 ChatMessageEntity(
@@ -501,19 +563,39 @@ object LunaAssistantController {
                     content = errReply
                 )
             )
+            // Turn the entire bubble completely red for 1 second, then disappear!
             _liveState.value = _liveState.value.copy(
-                phase = AssistantOverlayPhase.IDLE_NOTCH,
+                phase = AssistantOverlayPhase.THINKING,
+                isRetrying = false,
+                retryAttempt = 5,
+                isErrorFlash = true,
                 assistantReply = errReply,
                 activeTurnSteps = emptyList(),
                 activeThinkingText = "",
-                statusBadge = ""
+                statusBadge = if (settings.appLanguage.isGerman) {
+                    "Anbieter nicht erreichbar (5 Versuche fehlgeschlagen)"
+                } else {
+                    "Provider unreachable (5 retries failed)"
+                }
             )
+            delay(1000L)
             if (_liveState.value.isVisible) {
-                delay(800)
                 dismissOverlay(appContext)
+            } else {
+                _liveState.value = _liveState.value.copy(
+                    phase = AssistantOverlayPhase.IDLE_NOTCH,
+                    isErrorFlash = false,
+                    statusBadge = ""
+                )
             }
             return
         }
+
+        _liveState.value = _liveState.value.copy(
+            isRetrying = false,
+            retryAttempt = 0,
+            isErrorFlash = false
+        )
 
         chatDao.insertMessage(
             ChatMessageEntity(
@@ -568,6 +650,20 @@ object LunaAssistantController {
             if (_liveState.value.isVisible) {
                 delay(900L)
                 dismissOverlay(appContext)
+            }
+        }
+    }
+
+    private fun wakeScreenIfNeeded(context: Context) {
+        runCatching {
+            val pm = context.getSystemService(PowerManager::class.java) ?: return
+            if (!pm.isInteractive) {
+                @Suppress("DEPRECATION")
+                val wl = pm.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "luna:SideButtonWakeLock"
+                )
+                wl.acquire(4500L)
             }
         }
     }
