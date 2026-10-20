@@ -59,6 +59,63 @@ object LunaAgentTools {
     var isFlashlightOn: Boolean = false
         private set
 
+    private val builtInToolNames = setOf(
+        "set_flashlight",
+        "open_app",
+        "open_url_or_deep_link",
+        "set_volume",
+        "set_alarm_or_timer",
+        "get_device_status",
+        "open_system_settings",
+        "control_media",
+        "clipboard_action",
+        "search_duckduckgo",
+        "read_website",
+        "save_memory",
+        "recall_memories",
+        "forget_memory"
+    )
+
+    fun isBuiltInTool(name: String): Boolean {
+        return builtInToolNames.contains(name.trim().lowercase(Locale.ROOT))
+    }
+
+    // Bilingual (EN/DE) common app aliases mapped to label/package keywords
+    private val appSynonymKeywords: Map<String, List<String>> = mapOf(
+        "kamera" to listOf("camera", "kamera", "cam", "opencamera", "gcam"),
+        "camera" to listOf("camera", "kamera", "cam", "opencamera", "gcam"),
+        "einstellungen" to listOf("settings", "einstellungen", "com.android.settings"),
+        "settings" to listOf("settings", "einstellungen", "com.android.settings"),
+        "uhr" to listOf("clock", "uhr", "deskclock", "alarm"),
+        "wecker" to listOf("clock", "uhr", "deskclock", "alarm"),
+        "clock" to listOf("clock", "uhr", "deskclock", "alarm"),
+        "rechner" to listOf("calculator", "rechner", "taschenrechner", "calc"),
+        "taschenrechner" to listOf("calculator", "rechner", "taschenrechner", "calc"),
+        "calculator" to listOf("calculator", "rechner", "taschenrechner", "calc"),
+        "kalender" to listOf("calendar", "kalender", "etar"),
+        "calendar" to listOf("calendar", "kalender", "etar"),
+        "telefon" to listOf("phone", "telefon", "dialer", "contacts", "anrufe"),
+        "phone" to listOf("phone", "telefon", "dialer", "contacts"),
+        "nachrichten" to listOf("messages", "nachrichten", "mms", "sms", "messaging"),
+        "messages" to listOf("messages", "nachrichten", "mms", "sms", "messaging"),
+        "galerie" to listOf("gallery", "galerie", "photos", "fotos", "aves"),
+        "fotos" to listOf("photos", "fotos", "gallery", "galerie"),
+        "photos" to listOf("photos", "fotos", "gallery", "galerie"),
+        "musik" to listOf("music", "musik", "spotify", "ytmusic", "apple.android.music", "retro"),
+        "music" to listOf("music", "musik", "spotify", "ytmusic", "apple.android.music"),
+        "browser" to listOf("chrome", "browser", "firefox", "brave", "opera", "vivaldi", "duckduckgo"),
+        "karten" to listOf("maps", "karten", "navigation", "osmand", "organicmaps"),
+        "maps" to listOf("maps", "karten", "navigation", "osmand", "organicmaps"),
+        "dateien" to listOf("files", "dateien", "documentsui", "filemanager"),
+        "files" to listOf("files", "dateien", "documentsui", "filemanager"),
+        "notizen" to listOf("notes", "notizen", "keep", "obsidian", "notion"),
+        "notes" to listOf("notes", "notizen", "keep", "obsidian", "notion"),
+        "mail" to listOf("gmail", "mail", "email", "outlook", "thunderbird", "k9"),
+        "email" to listOf("gmail", "mail", "email", "outlook", "thunderbird", "k9"),
+        "play store" to listOf("play store", "vending", "aurora", "fdroid"),
+        "store" to listOf("play store", "vending", "aurora", "fdroid")
+    )
+
     fun buildOpenAiToolSchemas(context: Context): JSONArray {
         val settings = LunaSettingsRepository.current(context)
         val toolsArray = JSONArray()
@@ -98,19 +155,38 @@ object LunaAgentTools {
 
             addTool(
                 name = "open_app",
-                description = "Launch an installed Android application by its display name or package name (App öffnen).",
+                description = "Launch an installed Android application by its display name, German/English alias, or package name (App öffnen). Supports fuzzy matching.",
                 properties = JSONObject().put(
                     "app_name",
                     JSONObject()
                         .put("type", "string")
-                        .put("description", "Name of the app to open, e.g. 'Spotify', 'YouTube', 'Camera', 'Settings', 'WhatsApp'")
+                        .put("description", "Name of the app to open, e.g. 'Spotify', 'YouTube', 'Camera'/'Kamera', 'Settings', 'WhatsApp'")
                 ),
                 required = listOf("app_name")
             )
 
             addTool(
+                name = "open_url_or_deep_link",
+                description = "Open a website URL, YouTube video/search, or Maps location/navigation directly on the user's phone screen.",
+                properties = JSONObject()
+                    .put(
+                        "target",
+                        JSONObject()
+                            .put("type", "string")
+                            .put("description", "Full URL (https://...), search query, or address/place name")
+                    )
+                    .put(
+                        "type",
+                        JSONObject()
+                            .put("type", "string")
+                            .put("description", "'url' (default), 'youtube' (search/play on YouTube), or 'maps' (open location in Maps)")
+                    ),
+                required = listOf("target")
+            )
+
+            addTool(
                 name = "set_volume",
-                description = "Set or adjust the Android phone's audio volume (music, ring, alarm, assistant) to a percentage (0-100).",
+                description = "Set or adjust the Android phone's audio volume (music, ring, alarm, notification) to a percentage (0-100).",
                 properties = JSONObject()
                     .put(
                         "stream",
@@ -178,7 +254,7 @@ object LunaAgentTools {
         if (settings.webSearchEnabled) {
             addTool(
                 name = "search_duckduckgo",
-                description = "Search the web using DuckDuckGo for up-to-date grounding, facts, news, or URLs.",
+                description = "Search the web using DuckDuckGo for up-to-date grounding, facts, news, weather, prices, or URLs.",
                 properties = JSONObject()
                     .put("query", JSONObject().put("type", "string").put("description", "Search query in English or German"))
                     .put("max_results", JSONObject().put("type", "integer").put("description", "Max results (default 5)")),
@@ -189,7 +265,7 @@ object LunaAgentTools {
         if (settings.webReaderEnabled) {
             addTool(
                 name = "read_website",
-                description = "Fetch and read the clean text content of any website URL for grounding or summarization.",
+                description = "Fetch and read the clean article/page text content of any website URL for detailed grounding or summarization.",
                 properties = JSONObject().put(
                     "url",
                     JSONObject().put("type", "string").put("description", "Full HTTP/HTTPS URL to read")
@@ -238,14 +314,21 @@ object LunaAgentTools {
         args: JSONObject
     ): String = withContext(Dispatchers.IO) {
         try {
-            when (name) {
+            when (name.trim().lowercase(Locale.ROOT)) {
                 "set_flashlight" -> {
                     val enabled = args.optBoolean("enabled", !isFlashlightOn)
                     setFlashlight(context, enabled)
                 }
                 "open_app" -> {
                     val appName = args.optString("app_name", "")
+                        .ifBlank { args.optString("name", "") }
+                        .ifBlank { args.optString("package_name", "") }
                     openInstalledApp(context, appName)
+                }
+                "open_url_or_deep_link" -> {
+                    val target = args.optString("target", "").ifBlank { args.optString("url", "") }
+                    val type = args.optString("type", "url")
+                    openUrlOrDeepLink(context, target, type)
                 }
                 "set_volume" -> {
                     val stream = args.optString("stream", "music")
@@ -299,10 +382,10 @@ object LunaAgentTools {
                     val key = args.optString("key", "").trim()
                     forgetMemory(context, key)
                 }
-                else -> JSONObject().put("error", "Unknown built-in tool: $name").toString()
+                else -> JSONObject().put("ok", false).put("error", "Unknown built-in tool: $name").toString()
             }
         } catch (t: Throwable) {
-            JSONObject().put("error", t.message ?: "Tool execution failed").toString()
+            JSONObject().put("ok", false).put("error", t.message ?: "Tool execution failed").toString()
         }
     }
 
@@ -335,27 +418,61 @@ object LunaAgentTools {
         }
         val resolveInfos = pm.queryIntentActivities(mainIntent, PackageManager.MATCH_ALL)
         val normQuery = query.trim().lowercase(Locale.ROOT)
+        val queryTokens = normQuery.split(Regex("[\\s._-]+")).filter { it.length >= 2 }
+        val synonymCandidates = appSynonymKeywords[normQuery].orEmpty()
 
-        val matched = resolveInfos.firstOrNull { info ->
-            val label = info.loadLabel(pm).toString().lowercase(Locale.ROOT)
-            val pkg = info.activityInfo.packageName.lowercase(Locale.ROOT)
-            label == normQuery || pkg == normQuery
-        } ?: resolveInfos.firstOrNull { info ->
-            val label = info.loadLabel(pm).toString().lowercase(Locale.ROOT)
-            val pkg = info.activityInfo.packageName.lowercase(Locale.ROOT)
-            label.contains(normQuery) || pkg.contains(normQuery)
-        }
+        data class AppCandidate(
+            val label: String,
+            val normLabel: String,
+            val pkg: String,
+            val normPkg: String,
+            val score: Int
+        )
 
-        if (matched == null) {
+        val scored = resolveInfos.map { info ->
+            val label = info.loadLabel(pm).toString().trim()
+            val normLabel = label.lowercase(Locale.ROOT)
+            val pkg = info.activityInfo.packageName
+            val normPkg = pkg.lowercase(Locale.ROOT)
+
+            var score = 0
+            when {
+                normLabel == normQuery || normPkg == normQuery -> score += 100
+                normLabel.startsWith(normQuery) -> score += 85
+                normLabel.contains(normQuery) -> score += 70
+                normPkg.endsWith(".$normQuery") -> score += 75
+                normPkg.contains(normQuery) -> score += 55
+            }
+
+            for (syn in synonymCandidates) {
+                when {
+                    normLabel == syn -> score = maxOf(score, 92)
+                    normLabel.contains(syn) -> score = maxOf(score, 78)
+                    normPkg.contains(syn) -> score = maxOf(score, 68)
+                }
+            }
+
+            if (score == 0 && queryTokens.isNotEmpty()) {
+                val tokenHits = queryTokens.count { tok -> normLabel.contains(tok) || normPkg.contains(tok) }
+                if (tokenHits > 0) {
+                    score += tokenHits * 30
+                }
+            }
+
+            AppCandidate(label, normLabel, pkg, normPkg, score)
+        }.distinctBy { it.pkg }.sortedByDescending { it.score }
+
+        val best = scored.firstOrNull { it.score >= 30 }
+        if (best == null) {
+            val sampleApps = scored.take(25).map { it.label }.distinct().sorted().joinToString(", ")
             return JSONObject()
                 .put("ok", false)
                 .put("error", "No installed app matching '$query' was found.")
+                .put("installed_apps_sample", sampleApps)
                 .toString()
         }
 
-        val targetPkg = matched.activityInfo.packageName
-        val targetLabel = matched.loadLabel(pm).toString()
-        val launchIntent = pm.getLaunchIntentForPackage(targetPkg)?.apply {
+        val launchIntent = pm.getLaunchIntentForPackage(best.pkg)?.apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         if (launchIntent != null) {
@@ -364,11 +481,57 @@ object LunaAgentTools {
             LunaAssistantController.notifyExternalActivityLaunched(context)
             return JSONObject()
                 .put("ok", true)
-                .put("launched_app", targetLabel)
-                .put("package_name", targetPkg)
+                .put("requested", query)
+                .put("launched_app", best.label)
+                .put("package_name", best.pkg)
                 .toString()
         }
-        return JSONObject().put("ok", false).put("error", "Could not create launch intent for $targetLabel").toString()
+        return JSONObject().put("ok", false).put("error", "Could not create launch intent for ${best.label}").toString()
+    }
+
+    private fun openUrlOrDeepLink(context: Context, target: String, type: String): String {
+        val cleanTarget = target.trim()
+        if (cleanTarget.isEmpty()) {
+            return JSONObject().put("ok", false).put("error", "Empty target").toString()
+        }
+
+        val uri = when (type.trim().lowercase(Locale.ROOT)) {
+            "youtube", "video" -> {
+                if (cleanTarget.startsWith("http://") || cleanTarget.startsWith("https://")) {
+                    Uri.parse(cleanTarget)
+                } else {
+                    Uri.parse("https://www.youtube.com/results?search_query=${URLEncoder.encode(cleanTarget, "UTF-8")}")
+                }
+            }
+            "maps", "map", "navigation" -> {
+                if (cleanTarget.startsWith("http://") || cleanTarget.startsWith("https://") || cleanTarget.startsWith("geo:")) {
+                    Uri.parse(cleanTarget)
+                } else {
+                    Uri.parse("geo:0,0?q=${URLEncoder.encode(cleanTarget, "UTF-8")}")
+                }
+            }
+            else -> {
+                if (cleanTarget.startsWith("http://") || cleanTarget.startsWith("https://") || cleanTarget.contains("://")) {
+                    Uri.parse(cleanTarget)
+                } else {
+                    Uri.parse("https://$cleanTarget")
+                }
+            }
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        LunaAssistantController.notifyExternalActivityLaunched(context)
+        context.startActivity(intent)
+        LunaAssistantController.notifyExternalActivityLaunched(context)
+
+        return JSONObject()
+            .put("ok", true)
+            .put("type", type)
+            .put("target", cleanTarget)
+            .put("opened_uri", uri.toString())
+            .toString()
     }
 
     private fun setSystemVolume(context: Context, streamName: String, percent: Int): String {
@@ -530,7 +693,6 @@ object LunaAgentTools {
         val resultsArr = JSONArray()
         var instantSummary = ""
 
-        // Query DuckDuckGo Instant Answer JSON API for direct facts/definitions
         val iaUrl = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
         runCatching {
             val iaReq = Request.Builder().url(iaUrl).get().build()
@@ -546,7 +708,6 @@ object LunaAgentTools {
         runCatching {
             httpClient.newCall(request).execute().use { response ->
                 val html = response.body?.string().orEmpty()
-                // Parse result blocks from DuckDuckGo HTML endpoint
                 val linkRegex = Regex(
                     """<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>""",
                     RegexOption.IGNORE_CASE
@@ -564,12 +725,14 @@ object LunaAgentTools {
                     val resolvedUrl = extractDuckDuckGoRedirectUrl(rawHref)
                     val title = stripHtmlTags(links[i].groupValues[2])
                     val snippet = if (i < snippets.size) stripHtmlTags(snippets[i].groupValues[1]) else ""
+                    val domain = runCatching { Uri.parse(resolvedUrl).host?.removePrefix("www.") ?: "" }.getOrDefault("")
                     if (title.isNotBlank() && resolvedUrl.isNotBlank()) {
                         resultsArr.put(
                             JSONObject()
                                 .put("rank", i + 1)
                                 .put("title", title)
                                 .put("url", resolvedUrl)
+                                .put("domain", domain)
                                 .put("snippet", snippet)
                         )
                     }
@@ -577,7 +740,6 @@ object LunaAgentTools {
             }
         }
 
-        // Fallback to Instant Answer RelatedTopics if HTML results were sparse
         if (resultsArr.length() == 0) {
             runCatching {
                 val iaReq = Request.Builder().url(iaUrl).get().build()
@@ -592,6 +754,7 @@ object LunaAgentTools {
                                 .put("rank", 1)
                                 .put("title", json.optString("Heading", query))
                                 .put("url", abstractUrl)
+                                .put("domain", runCatching { Uri.parse(abstractUrl).host?.removePrefix("www.") ?: "" }.getOrDefault(""))
                                 .put("snippet", abstractText)
                         )
                     }
@@ -607,6 +770,7 @@ object LunaAgentTools {
                                         .put("rank", resultsArr.length() + 1)
                                         .put("title", text.take(80))
                                         .put("url", firstUrl)
+                                        .put("domain", runCatching { Uri.parse(firstUrl).host?.removePrefix("www.") ?: "" }.getOrDefault(""))
                                         .put("snippet", text)
                                 )
                             }
@@ -736,7 +900,10 @@ object LunaAgentTools {
         val withoutScripts = html
             .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("<noscript[^>]*>[\\s\\S]*?</noscript>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("<header[^>]*>[\\s\\S]*?</header>", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("<nav[^>]*>[\\s\\S]*?</nav>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("<aside[^>]*>[\\s\\S]*?</aside>", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("<footer[^>]*>[\\s\\S]*?</footer>", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("<svg[^>]*>[\\s\\S]*?</svg>", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("</(p|div|h1|h2|h3|h4|li|tr|br)>", RegexOption.IGNORE_CASE), "\n")

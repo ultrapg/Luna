@@ -244,6 +244,7 @@ data class LunaSettings(
     val webReaderEnabled: Boolean = true,
     val androidActionsEnabled: Boolean = true,
     val memoryEnabled: Boolean = true,
+    val apiBuiltInMcpEnabled: Boolean = true,
     val mcpServers: List<McpServerConfig> = emptyList()
 )
 
@@ -372,6 +373,7 @@ object LunaSettingsRepository {
             webReaderEnabled = p.getBoolean("web_reader_enabled", true),
             androidActionsEnabled = p.getBoolean("android_actions_enabled", true),
             memoryEnabled = p.getBoolean("memory_enabled", true),
+            apiBuiltInMcpEnabled = p.getBoolean("api_builtin_mcp_enabled", true),
             mcpServers = parsedMcp
         )
     }
@@ -431,6 +433,7 @@ object LunaSettingsRepository {
             .putBoolean("web_reader_enabled", s.webReaderEnabled)
             .putBoolean("android_actions_enabled", s.androidActionsEnabled)
             .putBoolean("memory_enabled", s.memoryEnabled)
+            .putBoolean("api_builtin_mcp_enabled", s.apiBuiltInMcpEnabled)
             .putString("mcp_servers", mcpArr.toString())
             .apply()
     }

@@ -42,8 +42,8 @@ data class AgentStepEvent(
 )
 
 /**
- * Detailed record of a single tool invocation or reasoning step so the user can tap any tool
- * icon above a chat message to inspect what it did and what the results were.
+ * Detailed record of a single tool invocation, API built-in MCP execution, or reasoning step
+ * so the user can inspect the full multi-step execution timeline in the chat UI.
  */
 data class ToolExecutionRecord(
     val stepIndex: Int,
@@ -53,8 +53,25 @@ data class ToolExecutionRecord(
     val resultSummary: String,
     val rawArgumentsJson: String = "",
     val rawResultJson: String = "",
-    val durationMs: Long = 0L
-)
+    val durationMs: Long = 0L,
+    val category: String = inferCategory(toolName),
+    val status: String = "DONE" // "RUNNING", "DONE", "ERROR"
+) {
+    companion object {
+        fun inferCategory(name: String): String {
+            val lower = name.trim().lowercase(Locale.ROOT)
+            return when {
+                lower == "thinking" || lower == "thought" || lower == "gedacht" -> "THINKING"
+                lower == "search_duckduckgo" || lower == "read_website" -> "WEB"
+                lower == "save_memory" || lower == "recall_memories" || lower == "forget_memory" -> "MEMORY"
+                lower.startsWith("api_mcp") || lower.startsWith("mcp_api_") || lower.startsWith("builtin_mcp") -> "API_MCP"
+                lower.startsWith("mcp_") -> "MCP"
+                LunaAgentTools.isBuiltInTool(lower) -> "ANDROID"
+                else -> "API_MCP"
+            }
+        }
+    }
+}
 
 object ToolExecutionCodec {
     fun encode(records: List<ToolExecutionRecord>): String {
@@ -71,6 +88,8 @@ object ToolExecutionCodec {
                     .put("argsJson", r.rawArgumentsJson)
                     .put("resultJson", r.rawResultJson)
                     .put("ms", r.durationMs)
+                    .put("cat", r.category)
+                    .put("status", r.status)
             )
         }
         return arr.toString()
@@ -86,6 +105,7 @@ object ToolExecutionCodec {
                 for (i in 0 until arr.length()) {
                     val obj = arr.optJSONObject(i) ?: continue
                     val tool = obj.optString("tool", "tool")
+                    val cat = obj.optString("cat", "").ifBlank { ToolExecutionRecord.inferCategory(tool) }
                     out.add(
                         ToolExecutionRecord(
                             stepIndex = obj.optInt("step", i + 1),
@@ -95,7 +115,9 @@ object ToolExecutionCodec {
                             resultSummary = obj.optString("result", ""),
                             rawArgumentsJson = obj.optString("argsJson", ""),
                             rawResultJson = obj.optString("resultJson", ""),
-                            durationMs = obj.optLong("ms", 0L)
+                            durationMs = obj.optLong("ms", 0L),
+                            category = cat,
+                            status = obj.optString("status", "DONE")
                         )
                     )
                 }
@@ -134,10 +156,10 @@ data class AgentCompletionResult(
  * Features:
  * - Connects to any OpenAI-compatible endpoint (`/v1/chat/completions`, `/v1/models`) —
  *   OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, vLLM, Google Gemini OpenAI endpoint, etc.
- * - Multi-step Function Calling loop (`tools` + `tool_calls`) with parallel tool execution within a step
- *   and shortest-path optimization for fast voice responses.
- * - Records detailed `ToolExecutionRecord` entries (`whatItDid` + `resultSummary`) so tapping tool icons
- *   in the chat displays full execution details and results.
+ * - Supports both client-side tools (Android Hardware, Web Search/Reader, Memory, User MCP Servers)
+ *   AND API Built-In MCPs (`<baseUrl>/mcp` auto-discovery + server-executed `executed_tools` / `mcp_calls` / `citations`).
+ * - Streams live multi-step execution traces (`onLiveTraceUpdated`) so the chat UI renders a live
+ *   interactive step-by-step progress timeline while the assistant is working.
  */
 object OpenAiAgentEngine {
     private const val MAX_AGENT_STEPS = 8
@@ -193,14 +215,15 @@ object OpenAiAgentEngine {
 
     /**
      * Runs the full multi-step Luna agent loop with parallel tool execution, web grounding,
-     * MCP tools, persistent memory, and detailed step recording.
+     * API built-in MCPs + user MCP servers, persistent memory, and live step streaming.
      */
     suspend fun runAgentTurn(
         context: Context,
         conversationHistory: List<ChatMessageEntity>,
         userPrompt: String,
         detectedLanguage: String? = null,
-        onToolStep: ((AgentStepEvent) -> Unit)? = null
+        onToolStep: ((AgentStepEvent) -> Unit)? = null,
+        onLiveTraceUpdated: ((List<ToolExecutionRecord>, String) -> Unit)? = null
     ): AgentCompletionResult = withContext(Dispatchers.IO) {
         val settings = LunaSettingsRepository.current(context)
         val isDe = settings.appLanguage.isGerman
@@ -221,7 +244,6 @@ object OpenAiAgentEngine {
             )
         }
 
-        // Load persistent memories to inject into system prompt
         val memories = if (settings.memoryEnabled) {
             runCatching { LunaDatabase.getInstance(context).memoryDao().getAllMemories() }.getOrDefault(emptyList())
         } else {
@@ -230,10 +252,17 @@ object OpenAiAgentEngine {
 
         val systemPrompt = buildSystemPrompt(settings, memories.map { "${it.key}: ${it.value}" }, detectedLanguage)
 
-        // Build OpenAI tools array (Android actions + DuckDuckGo + Web Reader + Memory + MCP servers)
+        // Build OpenAI tools array (Android actions + DuckDuckGo + Web Reader + Memory + User MCPs + API Built-In MCPs)
         val toolsArray = LunaAgentTools.buildOpenAiToolSchemas(context)
-        val mcpTools = if (settings.mcpServers.any { it.enabled }) {
-            runCatching { LunaMcpClient.discoverAllTools(settings.mcpServers) }.getOrDefault(emptyList())
+        val mcpTools = if (settings.mcpServers.any { it.enabled } || settings.apiBuiltInMcpEnabled) {
+            runCatching {
+                LunaMcpClient.discoverAllTools(
+                    servers = settings.mcpServers,
+                    apiBaseUrl = cleanBase,
+                    apiKey = settings.openAiApiKey,
+                    enableApiBuiltInMcp = settings.apiBuiltInMcpEnabled
+                )
+            }.getOrDefault(emptyList())
         } else {
             emptyList()
         }
@@ -242,8 +271,6 @@ object OpenAiAgentEngine {
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
 
-        // Add recent conversation history (up to last 14 messages), including previous tool results
-        // so continuous follow-up questions remember both what was spoken and what tools found
         val recentHistory = conversationHistory.takeLast(14)
         for (msg in recentHistory) {
             if (msg.role == "user" || msg.role == "assistant") {
@@ -273,6 +300,7 @@ object OpenAiAgentEngine {
         val executedTools = mutableListOf<String>()
         val toolRecords = mutableListOf<ToolExecutionRecord>()
         val collectedThoughts = mutableListOf<String>()
+        var totalThinkingDurationMs = 0L
         var useToolsInRequest = toolsArray.length() > 0
         var useThinkingParam = settings.thinkingEffort != ThinkingEffort.DEFAULT
 
@@ -298,6 +326,7 @@ object OpenAiAgentEngine {
                 payload.put("tool_choice", "auto")
             }
 
+            val llmStepStartMs = SystemClock.elapsedRealtime()
             val responseJson = try {
                 postChatCompletion(cleanBase, settings.openAiApiKey, payload)
             } catch (e: ToolNotSupportedHttpException) {
@@ -318,17 +347,42 @@ object OpenAiAgentEngine {
                     throw e
                 }
             }
+            val llmStepElapsedMs = (SystemClock.elapsedRealtime() - llmStepStartMs).coerceAtLeast(1L)
 
             val choice = responseJson.optJSONArray("choices")?.optJSONObject(0)
                 ?: throw IOException("Empty choices in API response")
             val messageObj = choice.optJSONObject("message")
                 ?: throw IOException("Missing message in API response")
 
-            // Capture any reasoning / <think> from this step
+            // 1. Capture any reasoning / <think> from this step
             val stepRawContent = messageObj.optString("content", "").trim()
             val stepReasoning = extractThinkingContent(messageObj, stepRawContent)
             if (stepReasoning.isNotBlank()) {
                 collectedThoughts.add(stepReasoning)
+                totalThinkingDurationMs += llmStepElapsedMs
+                onLiveTraceUpdated?.invoke(toolRecords.toList(), collectedThoughts.joinToString("\n\n"))
+            }
+
+            // 2. Capture any API Built-In MCP / server-executed tools returned directly in the response
+            if (settings.apiBuiltInMcpEnabled) {
+                val serverExecutedRecords = extractServerSideExecutedTools(
+                    responseJson = responseJson,
+                    choiceObj = choice,
+                    messageObj = messageObj,
+                    startingStepIndex = toolRecords.size + 1,
+                    defaultDurationMs = llmStepElapsedMs,
+                    isDe = isDe
+                )
+                if (serverExecutedRecords.isNotEmpty()) {
+                    for (srvRec in serverExecutedRecords) {
+                        // Avoid duplicate insertion across turns
+                        if (toolRecords.none { it.toolName == srvRec.toolName && it.whatItDid == srvRec.whatItDid }) {
+                            executedTools.add(srvRec.displayTitle)
+                            toolRecords.add(srvRec)
+                        }
+                    }
+                    onLiveTraceUpdated?.invoke(toolRecords.toList(), collectedThoughts.joinToString("\n\n"))
+                }
             }
 
             val toolCalls = messageObj.optJSONArray("tool_calls")
@@ -340,22 +394,45 @@ object OpenAiAgentEngine {
                     val callId: String,
                     val fnName: String,
                     val rawArgs: String,
-                    val parsedArgs: JSONObject
+                    val parsedArgs: JSONObject,
+                    val prePopulatedServerOutput: String?
                 )
 
                 val pendingCalls = mutableListOf<PendingCall>()
                 for (i in 0 until toolCalls.length()) {
                     val tc = toolCalls.optJSONObject(i) ?: continue
                     val callId = tc.optString("id", "call_${step}_$i")
-                    val fnObj = tc.optJSONObject("function") ?: continue
-                    val fnName = fnObj.optString("name", "")
+                    val fnObj = tc.optJSONObject("function") ?: tc
+                    val fnName = fnObj.optString("name", "").ifBlank { tc.optString("name", "") }
                     if (fnName.isBlank()) continue
-                    val rawArgs = fnObj.optString("arguments", "{}")
+                    val rawArgs = fnObj.optString("arguments", "").ifBlank { tc.optString("arguments", "{}") }
                     val parsedArgs = runCatching { JSONObject(rawArgs) }.getOrDefault(JSONObject())
-                    pendingCalls.add(PendingCall(i, callId, fnName, rawArgs, parsedArgs))
+                    val serverOutput = fnObj.optString("output", "")
+                        .ifBlank { tc.optString("output", "") }
+                        .ifBlank { tc.optString("result", "") }
+                        .takeIf { it.isNotBlank() }
+                    pendingCalls.add(PendingCall(i, callId, fnName, rawArgs, parsedArgs, serverOutput))
                 }
 
-                // Notify UI status for the current step
+                // Emit live RUNNING placeholders to the UI so the user sees the multi-step plan in real time
+                val runningPreviewRecords = pendingCalls.mapIndexed { idx, call ->
+                    ToolExecutionRecord(
+                        stepIndex = toolRecords.size + idx + 1,
+                        toolName = call.fnName,
+                        displayTitle = formatToolDisplayLabel(call.fnName, call.parsedArgs, isDe),
+                        whatItDid = formatToolDisplayLabel(call.fnName, call.parsedArgs, isDe),
+                        resultSummary = if (isDe) "Wird ausgeführt..." else "Running...",
+                        rawArgumentsJson = call.rawArgs,
+                        durationMs = 0L,
+                        category = resolveToolCategory(call.fnName, call.prePopulatedServerOutput != null),
+                        status = "RUNNING"
+                    )
+                }
+                onLiveTraceUpdated?.invoke(
+                    toolRecords + runningPreviewRecords,
+                    collectedThoughts.joinToString("\n\n")
+                )
+
                 pendingCalls.firstOrNull()?.let { firstCall ->
                     onToolStep?.invoke(
                         AgentStepEvent(
@@ -370,18 +447,57 @@ object OpenAiAgentEngine {
                     pendingCalls.map { call ->
                         async(Dispatchers.IO) {
                             val startMs = SystemClock.elapsedRealtime()
-                            val output = if (call.fnName.startsWith("mcp_")) {
-                                LunaMcpClient.callMcpTool(settings.mcpServers, call.fnName, call.parsedArgs)
-                            } else {
-                                LunaAgentTools.executeBuiltInTool(context, call.fnName, call.parsedArgs)
+                            val matchedMcp = LunaMcpClient.findMatchingMcpTool(call.fnName)
+                            val isBuiltIn = LunaAgentTools.isBuiltInTool(call.fnName)
+
+                            val (output, category) = when {
+                                call.prePopulatedServerOutput != null -> {
+                                    call.prePopulatedServerOutput to "API_MCP"
+                                }
+                                matchedMcp != null -> {
+                                    val mcpOut = LunaMcpClient.callMcpTool(
+                                        servers = settings.mcpServers,
+                                        requestedToolName = call.fnName,
+                                        arguments = call.parsedArgs,
+                                        apiBaseUrl = cleanBase,
+                                        apiKey = settings.openAiApiKey,
+                                        enableApiBuiltInMcp = settings.apiBuiltInMcpEnabled
+                                    )
+                                    mcpOut to (if (matchedMcp.isApiBuiltIn) "API_MCP" else "MCP")
+                                }
+                                call.fnName.startsWith("mcp_") || !isBuiltIn -> {
+                                    val mcpOut = LunaMcpClient.callMcpTool(
+                                        servers = settings.mcpServers,
+                                        requestedToolName = call.fnName,
+                                        arguments = call.parsedArgs,
+                                        apiBaseUrl = cleanBase,
+                                        apiKey = settings.openAiApiKey,
+                                        enableApiBuiltInMcp = settings.apiBuiltInMcpEnabled
+                                    )
+                                    val cat = if (call.fnName.startsWith("mcp_api_") || !call.fnName.startsWith("mcp_")) {
+                                        "API_MCP"
+                                    } else {
+                                        "MCP"
+                                    }
+                                    mcpOut to cat
+                                }
+                                else -> {
+                                    val builtInOut = LunaAgentTools.executeBuiltInTool(context, call.fnName, call.parsedArgs)
+                                    builtInOut to ToolExecutionRecord.inferCategory(call.fnName)
+                                }
                             }
                             val elapsedMs = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(1L)
-                            Triple(call, output, elapsedMs)
+                            Triple(call, output to category, elapsedMs)
                         }
                     }.awaitAll()
                 }
 
-                for ((call, toolOutput, elapsedMs) in stepOutputs) {
+                var serverAlreadyExecutedAll = true
+                for ((call, outputAndCat, elapsedMs) in stepOutputs) {
+                    val (toolOutput, category) = outputAndCat
+                    if (call.prePopulatedServerOutput == null) {
+                        serverAlreadyExecutedAll = false
+                    }
                     executedTools.add(call.fnName)
                     val record = buildToolExecutionRecord(
                         stepIndex = toolRecords.size + 1,
@@ -390,6 +506,7 @@ object OpenAiAgentEngine {
                         rawArgs = call.rawArgs,
                         rawOutput = toolOutput,
                         durationMs = elapsedMs,
+                        categoryOverride = category,
                         isDe = isDe
                     )
                     toolRecords.add(record)
@@ -402,32 +519,40 @@ object OpenAiAgentEngine {
                             .put("content", toolOutput)
                     )
                 }
+
+                onLiveTraceUpdated?.invoke(toolRecords.toList(), collectedThoughts.joinToString("\n\n"))
+
+                // If the API executed the tool calls server-side AND already provided the final spoken answer
+                // in the same message, we don't need an extra round-trip!
+                val possibleFinalText = stripThinkingBlocks(stepRawContent)
+                if (serverAlreadyExecutedAll && possibleFinalText.isNotBlank()) {
+                    prependThinkingRecordIfPresent(
+                        collectedThoughts = collectedThoughts,
+                        totalThinkingDurationMs = totalThinkingDurationMs,
+                        executedTools = executedTools,
+                        toolRecords = toolRecords,
+                        isDe = isDe
+                    )
+                    return@withContext AgentCompletionResult(
+                        replyText = possibleFinalText,
+                        executedToolsSummary = executedTools,
+                        toolRecords = toolRecords,
+                        encodedToolCallsSummary = ToolExecutionCodec.encode(toolRecords),
+                        modelUsed = modelId
+                    )
+                }
                 continue
             }
 
             val cleanReply = stripThinkingBlocks(stepRawContent)
 
-            if (collectedThoughts.isNotEmpty()) {
-                val thinkTitle = if (isDe) "Gedacht" else "Thought"
-                executedTools.add(0, thinkTitle)
-                toolRecords.add(
-                    0,
-                    ToolExecutionRecord(
-                        stepIndex = 0,
-                        toolName = "thinking",
-                        displayTitle = thinkTitle,
-                        whatItDid = if (isDe) {
-                            "Interne mehrstufige Überlegung des Modells (nicht vorgelesen)"
-                        } else {
-                            "Model internal reasoning & planning (not spoken aloud by TTS)"
-                        },
-                        resultSummary = collectedThoughts.joinToString("\n\n"),
-                        rawArgumentsJson = "",
-                        rawResultJson = collectedThoughts.joinToString("\n\n"),
-                        durationMs = 0L
-                    )
-                )
-            }
+            prependThinkingRecordIfPresent(
+                collectedThoughts = collectedThoughts,
+                totalThinkingDurationMs = totalThinkingDurationMs,
+                executedTools = executedTools,
+                toolRecords = toolRecords,
+                isDe = isDe
+            )
 
             return@withContext AgentCompletionResult(
                 replyText = cleanReply.ifBlank {
@@ -440,6 +565,14 @@ object OpenAiAgentEngine {
             )
         }
 
+        prependThinkingRecordIfPresent(
+            collectedThoughts = collectedThoughts,
+            totalThinkingDurationMs = totalThinkingDurationMs,
+            executedTools = executedTools,
+            toolRecords = toolRecords,
+            isDe = isDe
+        )
+
         AgentCompletionResult(
             replyText = if (isDe) {
                 "Ich habe die gewünschten Aktionen ausgeführt."
@@ -451,6 +584,165 @@ object OpenAiAgentEngine {
             encodedToolCallsSummary = ToolExecutionCodec.encode(toolRecords),
             modelUsed = modelId
         )
+    }
+
+    private fun prependThinkingRecordIfPresent(
+        collectedThoughts: List<String>,
+        totalThinkingDurationMs: Long,
+        executedTools: MutableList<String>,
+        toolRecords: MutableList<ToolExecutionRecord>,
+        isDe: Boolean
+    ) {
+        if (collectedThoughts.isNotEmpty() && toolRecords.none { it.toolName == "thinking" }) {
+            val thinkTitle = if (isDe) "Gedankengang" else "Reasoning"
+            val combinedThoughts = collectedThoughts.joinToString("\n\n---\n\n")
+            executedTools.add(0, thinkTitle)
+            toolRecords.add(
+                0,
+                ToolExecutionRecord(
+                    stepIndex = 0,
+                    toolName = "thinking",
+                    displayTitle = thinkTitle,
+                    whatItDid = if (isDe) {
+                        "Mehrstufige Überlegung & Planung des Modells (${collectedThoughts.size} ${if (collectedThoughts.size == 1) "Schritt" else "Schritte"})"
+                    } else {
+                        "Model multi-step reasoning & planning (${collectedThoughts.size} ${if (collectedThoughts.size == 1) "step" else "steps"})"
+                    },
+                    resultSummary = combinedThoughts,
+                    rawArgumentsJson = "",
+                    rawResultJson = combinedThoughts,
+                    durationMs = totalThinkingDurationMs,
+                    category = "THINKING",
+                    status = "DONE"
+                )
+            )
+        }
+    }
+
+    /**
+     * Parses server-executed built-in MCP / tool traces returned directly in OpenAI-compatible
+     * responses (e.g. Groq `message.executed_tools`, vLLM/LiteLLM/LM Studio `mcp_calls` / `server_tool_use`,
+     * OpenRouter/Perplexity `citations` & `annotations`).
+     */
+    private fun extractServerSideExecutedTools(
+        responseJson: JSONObject,
+        choiceObj: JSONObject,
+        messageObj: JSONObject,
+        startingStepIndex: Int,
+        defaultDurationMs: Long,
+        isDe: Boolean
+    ): List<ToolExecutionRecord> {
+        val records = mutableListOf<ToolExecutionRecord>()
+        var nextIdx = startingStepIndex
+
+        val candidateArrays = listOfNotNull(
+            messageObj.optJSONArray("executed_tools"),
+            messageObj.optJSONArray("mcp_calls"),
+            messageObj.optJSONArray("mcp_tool_calls"),
+            messageObj.optJSONArray("server_tool_use"),
+            choiceObj.optJSONArray("executed_tools"),
+            choiceObj.optJSONArray("mcp_calls"),
+            responseJson.optJSONArray("executed_tools")
+        )
+
+        for (arr in candidateArrays) {
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val rawName = item.optString("name", "")
+                    .ifBlank { item.optString("tool_name", "") }
+                    .ifBlank { item.optString("type", "api_mcp_tool") }
+                val serverLabel = item.optString("server_label", "")
+                    .ifBlank { item.optString("server_name", "API MCP") }
+                val rawArgs = item.optString("arguments", "")
+                    .ifBlank { item.optJSONObject("arguments")?.toString() ?: "" }
+                    .ifBlank { item.optJSONObject("input")?.toString() ?: "{}" }
+                val rawOut = item.optString("output", "")
+                    .ifBlank { item.optString("result", "") }
+                    .ifBlank { item.optJSONObject("output")?.toString() ?: "" }
+                    .ifBlank { item.toString() }
+
+                val title = if (serverLabel.isNotBlank() && serverLabel != "API MCP") {
+                    "$serverLabel: $rawName"
+                } else {
+                    "API MCP: $rawName"
+                }
+                records.add(
+                    ToolExecutionRecord(
+                        stepIndex = nextIdx++,
+                        toolName = "api_mcp_$rawName",
+                        displayTitle = title,
+                        whatItDid = if (isDe) {
+                            "Vom API-Server integriertes MCP-Tool '$rawName' ausgeführt" +
+                                if (rawArgs.isNotBlank() && rawArgs != "{}") " ($rawArgs)" else ""
+                        } else {
+                            "Executed API built-in MCP tool '$rawName'" +
+                                if (rawArgs.isNotBlank() && rawArgs != "{}") " ($rawArgs)" else ""
+                        },
+                        resultSummary = rawOut.take(1500),
+                        rawArgumentsJson = rawArgs,
+                        rawResultJson = rawOut,
+                        durationMs = item.optLong("duration_ms", defaultDurationMs),
+                        category = "API_MCP",
+                        status = "DONE"
+                    )
+                )
+            }
+        }
+
+        // Also check OpenRouter / Perplexity / OpenAI web search annotations & citations
+        val citationsArr = responseJson.optJSONArray("citations") ?: messageObj.optJSONArray("citations")
+        val annotationsArr = messageObj.optJSONArray("annotations")
+        if ((citationsArr != null && citationsArr.length() > 0) || (annotationsArr != null && annotationsArr.length() > 0)) {
+            val urls = mutableListOf<String>()
+            if (citationsArr != null) {
+                for (i in 0 until citationsArr.length()) {
+                    val u = citationsArr.optString(i, "").trim()
+                    if (u.isNotBlank()) urls.add(u)
+                }
+            }
+            if (annotationsArr != null) {
+                for (i in 0 until annotationsArr.length()) {
+                    val ann = annotationsArr.optJSONObject(i) ?: continue
+                    val urlCit = ann.optJSONObject("url_citation") ?: ann
+                    val u = urlCit.optString("url", "").trim()
+                    val t = urlCit.optString("title", "").trim()
+                    if (u.isNotBlank()) {
+                        urls.add(if (t.isNotBlank()) "$t — $u" else u)
+                    }
+                }
+            }
+            if (urls.isNotEmpty()) {
+                records.add(
+                    ToolExecutionRecord(
+                        stepIndex = nextIdx,
+                        toolName = "api_mcp_web_grounding",
+                        displayTitle = if (isDe) "API Web-Quellen (${urls.size})" else "API Web Grounding (${urls.size})",
+                        whatItDid = if (isDe) {
+                            "Modell-integrierte Websuche / API-Grounding verwendet"
+                        } else {
+                            "Used model's built-in API web search / grounding"
+                        },
+                        resultSummary = urls.distinct().mapIndexed { idx, s -> "${idx + 1}. $s" }.joinToString("\n"),
+                        rawArgumentsJson = "",
+                        rawResultJson = urls.joinToString("\n"),
+                        durationMs = defaultDurationMs,
+                        category = "API_MCP",
+                        status = "DONE"
+                    )
+                )
+            }
+        }
+
+        return records
+    }
+
+    private fun resolveToolCategory(fnName: String, isServerPrePopulated: Boolean): String {
+        if (isServerPrePopulated) return "API_MCP"
+        val matchedMcp = LunaMcpClient.findMatchingMcpTool(fnName)
+        if (matchedMcp != null) {
+            return if (matchedMcp.isApiBuiltIn) "API_MCP" else "MCP"
+        }
+        return ToolExecutionRecord.inferCategory(fnName)
     }
 
     private class ToolNotSupportedHttpException(message: String) : IOException(message)
@@ -556,12 +848,17 @@ object OpenAiAgentEngine {
             - Summarize comparisons, lists, or data into natural spoken sentences that are easy to listen to.
             - If you use internal thinking (<think>...</think>), keep all reasoning inside <think>...</think> and put only the final spoken flow-text answer outside.
             
-            ### MULTI-STEP TASKS & SHORTEST-PATH SPEED RULES (CRITICAL FOR VOICE):
-            You can execute multi-step tasks and call multiple tools across steps or in parallel, including Android hardware/system actions (`set_flashlight`, `open_app`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`), Web Grounding (`search_duckduckgo`, `read_website`), Persistent Memory (`save_memory`, `recall_memories`, `forget_memory`), and MCP tools.
+            ### MULTI-STEP TASKS, BUILT-IN MCPs & SHORTEST-PATH SPEED RULES (CRITICAL FOR VOICE):
+            You can execute multi-step tasks and call multiple tools across steps or in parallel, including:
+            - Android Hardware & System Actions (`set_flashlight`, `open_app`, `open_url_or_deep_link`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`)
+            - Web Grounding (`search_duckduckgo`, `read_website`)
+            - Persistent Memory (`save_memory`, `recall_memories`, `forget_memory`)
+            - Model/API Built-In MCP tools and User MCP Server tools.
             Because you are a real-time speech assistant, ALWAYS choose the SHORTEST, FASTEST path to get information or complete a task:
             1. Batch independent actions together: If the user asks for multiple actions at once (e.g., "turn on the flashlight, set volume to 40%, and open Spotify"), emit all `tool_calls` in a SINGLE step so they run in parallel.
-            2. Fastest web lookup first: When looking up facts, news, weather, or prices, call `search_duckduckgo` first. If the returned `instant_answer` or `results` snippets already answer the question, respond IMMEDIATELY in the next turn without calling `read_website`. Only call `read_website` as a follow-up step when you genuinely need full-page details not present in the search snippets or when the user asks you to read a specific webpage.
-            3. Chain dependent steps cleanly: When a request truly requires sequential steps (e.g., search for a topic, read a specific article URL from the results, save a summary to memory, and open an app), execute each necessary step concisely and then give a clear spoken confirmation.
+            2. Fastest web lookup first: When looking up facts, news, weather, or prices, call `search_duckduckgo` (or a specialized MCP tool if available) first. If the returned `instant_answer` or `results` snippets already answer the question, respond IMMEDIATELY in the next turn without calling `read_website`. Only call `read_website` as a follow-up step when you genuinely need full-page details not present in the search snippets or when the user asks you to read a specific webpage.
+            3. Self-correction on app names: If `open_app` returns `installed_apps_sample` because an app name didn't match, pick the exact matching app name from `installed_apps_sample` and call `open_app` immediately.
+            4. Chain dependent steps cleanly: When a request requires sequential steps (e.g., search for a topic, read a specific article URL, save a summary to memory, or open a URL/app), execute each necessary step concisely and then give a clear spoken confirmation.
             $memoryBlock$customExtra
         """.trimIndent()
     }
@@ -573,12 +870,14 @@ object OpenAiAgentEngine {
         rawArgs: String,
         rawOutput: String,
         durationMs: Long,
+        categoryOverride: String,
         isDe: Boolean
     ): ToolExecutionRecord {
         val outJson = runCatching { JSONObject(rawOutput) }.getOrNull()
         val isOk = outJson?.optBoolean("ok", true) ?: !rawOutput.contains("\"error\"")
+        val statusStr = if (isOk) "DONE" else "ERROR"
 
-        return when (fnName) {
+        return when (fnName.trim().lowercase(Locale.ROOT)) {
             "set_flashlight" -> {
                 val on = args.optBoolean("enabled", true)
                 ToolExecutionRecord(
@@ -598,7 +897,9 @@ object OpenAiAgentEngine {
                         },
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "open_app" -> {
@@ -617,7 +918,26 @@ object OpenAiAgentEngine {
                     },
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
+                )
+            }
+            "open_url_or_deep_link" -> {
+                val target = args.optString("target", "")
+                val type = args.optString("type", "url")
+                val uriStr = outJson?.optString("opened_uri", target).orEmpty()
+                ToolExecutionRecord(
+                    stepIndex = stepIndex,
+                    toolName = fnName,
+                    displayTitle = if (isDe) "Öffne Link ($type)" else "Open Link ($type)",
+                    whatItDid = if (isDe) "Deep-Link / URL auf dem Gerät geöffnet: $target" else "Opened deep link / URL on device: $target",
+                    resultSummary = if (isOk) uriStr else (outJson?.optString("error", rawOutput) ?: rawOutput),
+                    rawArgumentsJson = rawArgs,
+                    rawResultJson = rawOutput,
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "set_volume" -> {
@@ -636,7 +956,9 @@ object OpenAiAgentEngine {
                     },
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "set_alarm_or_timer" -> {
@@ -653,7 +975,7 @@ object OpenAiAgentEngine {
                     stepIndex = stepIndex,
                     toolName = fnName,
                     displayTitle = if (mode.equals("timer", true)) {
-                        if (isDe) "Timer" else "Timer"
+                        "Timer"
                     } else {
                         if (isDe) "Wecker" else "Alarm"
                     },
@@ -661,7 +983,9 @@ object OpenAiAgentEngine {
                     resultSummary = if (isOk) summary else (outJson?.optString("error", rawOutput) ?: rawOutput),
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "get_device_status" -> {
@@ -683,7 +1007,9 @@ object OpenAiAgentEngine {
                     resultSummary = formatted,
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "open_system_settings" -> {
@@ -696,7 +1022,9 @@ object OpenAiAgentEngine {
                     resultSummary = if (isDe) "Bereich '$sec' geöffnet." else "Opened '$sec' settings screen.",
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "control_media" -> {
@@ -709,7 +1037,9 @@ object OpenAiAgentEngine {
                     resultSummary = if (isDe) "Ausgeführt: $act" else "Executed: $act",
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "clipboard_action" -> {
@@ -723,7 +1053,9 @@ object OpenAiAgentEngine {
                         ?: if (isDe) "Kopiert (${outJson?.optInt("copied_length", 0)} Zeichen)" else "Copied (${outJson?.optInt("copied_length", 0)} chars)",
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "ANDROID",
+                    status = statusStr
                 )
             }
             "search_duckduckgo" -> {
@@ -755,12 +1087,14 @@ object OpenAiAgentEngine {
                 ToolExecutionRecord(
                     stepIndex = stepIndex,
                     toolName = fnName,
-                    displayTitle = if (isDe) "Suche: ${q.take(22)}" else "Search: ${q.take(22)}",
+                    displayTitle = if (isDe) "Suche: ${q.take(24)}" else "Search: ${q.take(24)}",
                     whatItDid = if (isDe) "DuckDuckGo-Websuche nach \"$q\"" else "Searched DuckDuckGo for \"$q\"",
                     resultSummary = formattedResults,
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "WEB",
+                    status = statusStr
                 )
             }
             "read_website" -> {
@@ -778,7 +1112,9 @@ object OpenAiAgentEngine {
                     }.trim(),
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "WEB",
+                    status = statusStr
                 )
             }
             "save_memory" -> {
@@ -792,7 +1128,9 @@ object OpenAiAgentEngine {
                     resultSummary = "$k = $v",
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "MEMORY",
+                    status = statusStr
                 )
             }
             "recall_memories" -> {
@@ -821,7 +1159,9 @@ object OpenAiAgentEngine {
                     resultSummary = summary,
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "MEMORY",
+                    status = statusStr
                 )
             }
             "forget_memory" -> {
@@ -834,27 +1174,48 @@ object OpenAiAgentEngine {
                     resultSummary = if (isDe) "Schlüssel \"$k\" entfernt." else "Removed key \"$k\".",
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = "MEMORY",
+                    status = statusStr
                 )
             }
             else -> {
-                val cleanName = if (fnName.startsWith("mcp_")) "MCP: ${fnName.removePrefix("mcp_")}" else fnName
+                val serverName = outJson?.optString("mcp_server", "").orEmpty()
+                val toolShort = outJson?.optString("tool", "").orEmpty()
+                    .ifBlank { fnName.removePrefix("mcp_api_").removePrefix("mcp_") }
+                val mcpOutput = outJson?.optString("output", "").orEmpty()
+                    .ifBlank { outJson?.optString("error", "").orEmpty() }
+                    .ifBlank { rawOutput }
+
+                val prefixBadge = when {
+                    categoryOverride == "API_MCP" -> "API MCP"
+                    serverName.isNotBlank() -> serverName
+                    else -> "MCP"
+                }
                 ToolExecutionRecord(
                     stepIndex = stepIndex,
                     toolName = fnName,
-                    displayTitle = cleanName,
-                    whatItDid = if (isDe) "Werkzeug '$cleanName' mit Parametern $rawArgs aufgerufen" else "Called '$cleanName' with parameters $rawArgs",
-                    resultSummary = rawOutput.take(1200),
+                    displayTitle = "$prefixBadge: $toolShort",
+                    whatItDid = if (isDe) {
+                        "MCP-Werkzeug '$toolShort' über $prefixBadge ausgeführt" +
+                            if (rawArgs.isNotBlank() && rawArgs != "{}") " mit $rawArgs" else ""
+                    } else {
+                        "Executed MCP tool '$toolShort' via $prefixBadge" +
+                            if (rawArgs.isNotBlank() && rawArgs != "{}") " with $rawArgs" else ""
+                    },
+                    resultSummary = mcpOutput.take(1500),
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
-                    durationMs = durationMs
+                    durationMs = durationMs,
+                    category = categoryOverride,
+                    status = statusStr
                 )
             }
         }
     }
 
     private fun formatToolDisplayLabel(fnName: String, args: JSONObject, isDe: Boolean): String {
-        return when (fnName) {
+        return when (fnName.trim().lowercase(Locale.ROOT)) {
             "set_flashlight" -> {
                 val on = args.optBoolean("enabled", true)
                 if (isDe) "Taschenlampe ${if (on) "EIN" else "AUS"}" else "Flashlight ${if (on) "ON" else "OFF"}"
@@ -863,12 +1224,19 @@ object OpenAiAgentEngine {
                 val app = args.optString("app_name", "App")
                 if (isDe) "Öffne $app..." else "Opening $app..."
             }
+            "open_url_or_deep_link" -> {
+                val target = args.optString("target", "Link")
+                if (isDe) "Öffne $target..." else "Opening $target..."
+            }
             "set_volume" -> {
                 val pct = args.optInt("percent", 50)
                 if (isDe) "Lautstärke auf $pct%..." else "Setting volume to $pct%..."
             }
             "set_alarm_or_timer" -> {
                 if (isDe) "Stelle Wecker / Timer..." else "Setting alarm / timer..."
+            }
+            "get_device_status" -> {
+                if (isDe) "Prüfe Gerätestatus..." else "Checking device status..."
             }
             "search_duckduckgo" -> {
                 val q = args.optString("query", "")
@@ -886,9 +1254,9 @@ object OpenAiAgentEngine {
                 if (isDe) "Rufe Erinnerungen ab..." else "Recalling memories..."
             }
             else -> if (fnName.startsWith("mcp_")) {
-                "MCP: ${fnName.removePrefix("mcp_")}"
+                "MCP: ${fnName.removePrefix("mcp_api_").removePrefix("mcp_")}"
             } else {
-                fnName
+                "MCP: $fnName"
             }
         }
     }

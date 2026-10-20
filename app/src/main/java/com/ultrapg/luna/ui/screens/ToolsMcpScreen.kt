@@ -98,6 +98,15 @@ fun ToolsMcpScreen() {
                         LunaSettingsRepository.update(context) { it.copy(memoryEnabled = v) }
                     }
                 )
+
+                ToggleToolRow(
+                    title = if (isGerman) "Integrierte API-MCPs" else "API Built-In MCPs",
+                    subtitle = if (isGerman) "Nutzt im Modell / API integrierte MCP-Tools automatisch" else "Automatically uses MCP tools built into the API or model",
+                    checked = settings.apiBuiltInMcpEnabled,
+                    onCheckedChange = { v ->
+                        LunaSettingsRepository.update(context) { it.copy(apiBuiltInMcpEnabled = v) }
+                    }
+                )
             }
         }
 

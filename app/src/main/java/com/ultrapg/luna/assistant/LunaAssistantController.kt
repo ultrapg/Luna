@@ -18,6 +18,7 @@ import com.ultrapg.luna.core.database.ChatMessageEntity
 import com.ultrapg.luna.core.database.ChatSessionEntity
 import com.ultrapg.luna.core.database.LunaDatabase
 import com.ultrapg.luna.core.llm.OpenAiAgentEngine
+import com.ultrapg.luna.core.llm.ToolExecutionRecord
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.speech.LunaAudioRecorder
 import com.ultrapg.luna.core.speech.LunaSpeechPipeline
@@ -52,6 +53,8 @@ data class AssistantLiveState(
     val assistantReply: String = "",
     val statusBadge: String = "",
     val executedTools: List<String> = emptyList(),
+    val activeTurnSteps: List<ToolExecutionRecord> = emptyList(),
+    val activeThinkingText: String = "",
     val detectedLanguage: String = "en"
 )
 
@@ -124,7 +127,9 @@ object LunaAssistantController {
             activeSessionId = null,
             userTranscript = "",
             assistantReply = "",
-            executedTools = emptyList()
+            executedTools = emptyList(),
+            activeTurnSteps = emptyList(),
+            activeThinkingText = ""
         )
     }
 
@@ -146,7 +151,9 @@ object LunaAssistantController {
         LunaTtsEngine.getInstance(appContext).stopSpeaking()
         _liveState.value = _liveState.value.copy(
             phase = AssistantOverlayPhase.IDLE_NOTCH,
-            statusBadge = ""
+            statusBadge = "",
+            activeTurnSteps = emptyList(),
+            activeThinkingText = ""
         )
     }
 
@@ -410,6 +417,8 @@ object LunaAssistantController {
             _liveState.value = _liveState.value.copy(
                 userTranscript = clean,
                 assistantReply = "",
+                activeTurnSteps = emptyList(),
+                activeThinkingText = "",
                 phase = AssistantOverlayPhase.THINKING,
                 statusBadge = if (isDe) "Luna denkt nach..." else "Luna is thinking..."
             )
@@ -433,6 +442,11 @@ object LunaAssistantController {
         val db = LunaDatabase.getInstance(appContext)
         val chatDao = db.chatDao()
         val settings = LunaSettingsRepository.current(appContext)
+
+        _liveState.value = _liveState.value.copy(
+            activeTurnSteps = emptyList(),
+            activeThinkingText = ""
+        )
 
         val sessionId = _liveState.value.activeSessionId ?: run {
             val newId = chatDao.insertSession(
@@ -465,6 +479,12 @@ object LunaAssistantController {
                     _liveState.value = _liveState.value.copy(
                         statusBadge = step.statusText
                     )
+                },
+                onLiveTraceUpdated = { steps, thinkingText ->
+                    _liveState.value = _liveState.value.copy(
+                        activeTurnSteps = steps,
+                        activeThinkingText = thinkingText
+                    )
                 }
             )
         } catch (t: Throwable) {
@@ -480,6 +500,8 @@ object LunaAssistantController {
             _liveState.value = _liveState.value.copy(
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
                 assistantReply = errReply,
+                activeTurnSteps = emptyList(),
+                activeThinkingText = "",
                 statusBadge = ""
             )
             if (_liveState.value.isVisible) {
@@ -511,6 +533,8 @@ object LunaAssistantController {
                 phase = AssistantOverlayPhase.SPEAKING,
                 assistantReply = result.replyText,
                 executedTools = result.executedToolsSummary,
+                activeTurnSteps = emptyList(),
+                activeThinkingText = "",
                 statusBadge = ""
             )
             // Suspend until the entire TTS synthesis & playback completes
@@ -532,6 +556,8 @@ object LunaAssistantController {
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
                 assistantReply = result.replyText,
                 executedTools = result.executedToolsSummary,
+                activeTurnSteps = emptyList(),
+                activeThinkingText = "",
                 statusBadge = ""
             )
             if (_liveState.value.isVisible) {
