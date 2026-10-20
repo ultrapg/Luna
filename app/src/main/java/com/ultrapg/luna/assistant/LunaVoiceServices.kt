@@ -217,17 +217,23 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
                 val liveState by LunaAssistantController.liveState.collectAsState()
                 val curSettings by LunaSettingsRepository.settingsFlow.collectAsState()
                 val micRms by LunaAssistantController.audioRecorder.rmsLevel.collectAsState()
-                val waveBands by LunaAssistantController.audioRecorder.waveBands.collectAsState()
+                val micWaveBands by LunaAssistantController.audioRecorder.waveBands.collectAsState()
                 val ttsEngine = LunaTtsEngine.getInstance(themedContext.applicationContext)
                 val ttsRms by ttsEngine.outputRms.collectAsState()
+                val ttsWaveBands by ttsEngine.outputWaveBands.collectAsState()
                 val isSpeaking by ttsEngine.isSpeaking.collectAsState()
+                val activeWaveBands = if (isSpeaking || liveState.phase == AssistantOverlayPhase.SPEAKING) {
+                    ttsWaveBands
+                } else {
+                    micWaveBands
+                }
 
                 if (liveState.isVisible) {
                     GeminiSidePillOverlay(
                         liveState = liveState,
                         settings = curSettings,
                         micRms = micRms,
-                        waveBands = waveBands,
+                        waveBands = activeWaveBands,
                         ttsRms = ttsRms,
                         isSpeaking = isSpeaking,
                         onDragDelta = { dx, dy ->

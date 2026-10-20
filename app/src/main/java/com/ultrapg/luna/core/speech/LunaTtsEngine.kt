@@ -13,6 +13,7 @@ package com.ultrapg.luna.core.speech
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -28,10 +29,12 @@ import com.ultrapg.luna.core.models.LocalModelStorage
 import com.ultrapg.luna.core.settings.LunaSettings
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.settings.TtsVoiceModelId
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,21 +43,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
  * Fast, natural Female Text-to-Speech Engine for English and German:
- * 1. Custom User-Trained ONNX Voice Slot (`.onnx` + `tokens.txt` + optional `espeak-ng-data`) —
- *    allows the user to drop in their own custom-trained female voice model anytime.
- * 2. Downloaded Sherpa-ONNX Neural Female Voice Models:
- *    - English: `Amy` (`vits-piper-en_US-amy-medium`) or `Kokoro 82M` (`af_heart`, `af_bella`, `af_sarah`, `af_nicole`)
- *    - German: `Dii High` (`vits-piper-de_DE-dii-high`) or `Kerstin` (`vits-piper-de_DE-kerstin-low`)
- * 3. Instant Zero-Download Android Native Female TTS Fallback (`en_US` & `de_DE`) so Luna can speak
- *    with a warm female voice immediately out of the box even before neural models finish downloading.
+ * 1. Custom User-Trained ONNX Voice Slot (`.onnx` + `tokens.txt` + optional `espeak-ng-data`)
+ * 2. Downloaded Sherpa-ONNX Neural Female Voice Models (`Amy`, `Kokoro 82M`, `Dii High`, `Kerstin`)
+ * 3. Instant Zero-Download Android Native Female TTS Fallback (`en_US` & `de_DE`)
+ *
+ * Computes real-time `_outputRms` and 5-band `_outputWaveBands` during audio playback so the
+ * vertical side-notch bubble shows the exact same audio-reactive equalizer animation in light blue
+ * while speaking as it does in white while listening.
  */
 class LunaTtsEngine private constructor(context: Context) {
 
@@ -81,13 +87,18 @@ class LunaTtsEngine private constructor(context: Context) {
     private var speakingJob: Job? = null
 
     private var androidTts: TextToSpeech? = null
+    @Volatile
     private var androidTtsReady = false
+    private val utteranceWaiters = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
 
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
     private val _outputRms = MutableStateFlow(0f)
     val outputRms: StateFlow<Float> = _outputRms.asStateFlow()
+
+    private val _outputWaveBands = MutableStateFlow(floatArrayOf(0.1f, 0.1f, 0.1f, 0.1f, 0.1f))
+    val outputWaveBands: StateFlow<FloatArray> = _outputWaveBands.asStateFlow()
 
     init {
         initAndroidFallbackTts()
@@ -98,21 +109,34 @@ class LunaTtsEngine private constructor(context: Context) {
             androidTts = TextToSpeech(appContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     androidTtsReady = true
+                    androidTts?.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
                     androidTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                         override fun onStart(utteranceId: String?) {
                             _isSpeaking.value = true
-                            _outputRms.value = 0.45f
                         }
 
                         override fun onDone(utteranceId: String?) {
-                            _isSpeaking.value = false
-                            _outputRms.value = 0f
+                            if (utteranceId != null) {
+                                utteranceWaiters.remove(utteranceId)?.complete(Unit)
+                            }
                         }
 
                         @Deprecated("Deprecated in Java")
                         override fun onError(utteranceId: String?) {
-                            _isSpeaking.value = false
-                            _outputRms.value = 0f
+                            if (utteranceId != null) {
+                                utteranceWaiters.remove(utteranceId)?.complete(Unit)
+                            }
+                        }
+
+                        override fun onError(utteranceId: String?, errorCode: Int) {
+                            if (utteranceId != null) {
+                                utteranceWaiters.remove(utteranceId)?.complete(Unit)
+                            }
                         }
                     })
                 }
@@ -123,6 +147,8 @@ class LunaTtsEngine private constructor(context: Context) {
     fun stopSpeaking() {
         speakingJob?.cancel()
         speakingJob = null
+        utteranceWaiters.values.forEach { it.complete(Unit) }
+        utteranceWaiters.clear()
         runCatching {
             activeAudioTrack?.pause()
             activeAudioTrack?.flush()
@@ -135,25 +161,53 @@ class LunaTtsEngine private constructor(context: Context) {
         }
         _isSpeaking.value = false
         _outputRms.value = 0f
+        _outputWaveBands.value = floatArrayOf(0.06f, 0.06f, 0.06f, 0.06f, 0.06f)
     }
 
+    /**
+     * Fire-and-forget speak (used by the "Test" button in the Voice tab).
+     */
     fun speak(text: String, languageCode: String? = null) {
+        stopSpeaking()
+        speakingJob = scope.launch {
+            speakAndAwait(text, languageCode)
+        }
+    }
+
+    /**
+     * Suspends until the entire TTS utterance has finished playing out of the speaker.
+     * Drives `_isSpeaking`, `_outputRms`, and `_outputWaveBands` in real time.
+     */
+    suspend fun speakAndAwait(text: String, languageCode: String? = null) {
         val cleanText = stripMarkdownForSpeech(text)
         if (cleanText.isBlank()) return
 
         val settings = LunaSettingsRepository.current(appContext)
         if (!settings.ttsEnabled) return
 
-        stopSpeaking()
+        // Ensure Android audio routing is in normal media mode after microphone recording
+        runCatching {
+            val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (am != null && am.mode != AudioManager.MODE_NORMAL) {
+                am.mode = AudioManager.MODE_NORMAL
+            }
+        }
 
-        speakingJob = scope.launch {
+        _isSpeaking.value = true
+        _outputRms.value = 0.25f
+
+        try {
             val lang = languageCode?.lowercase(Locale.ROOT)
                 ?: detectTextLanguageHeuristic(cleanText, settings.appLanguage.resolveLanguageCode())
 
             val usedNeural = trySpeakWithNeuralOnnx(cleanText, lang, settings)
             if (!usedNeural) {
-                speakWithAndroidFemaleFallback(cleanText, lang, settings)
+                speakWithAndroidFemaleFallbackAndAwait(cleanText, lang, settings)
             }
+        } finally {
+            _isSpeaking.value = false
+            _outputRms.value = 0f
+            _outputWaveBands.value = floatArrayOf(0.06f, 0.06f, 0.06f, 0.06f, 0.06f)
         }
     }
 
@@ -163,6 +217,7 @@ class LunaTtsEngine private constructor(context: Context) {
         settings: LunaSettings
     ): Boolean = withContext(Dispatchers.Default) {
         ttsMutex.withLock {
+            var track: AudioTrack? = null
             try {
                 val ttsInstance = resolveOrLoadOfflineTtsLocked(langCode, settings) ?: return@withLock false
                 val speakerId = if (loadedModelSignature?.startsWith("kokoro") == true) {
@@ -182,10 +237,10 @@ class LunaTtsEngine private constructor(context: Context) {
                     AudioFormat.ENCODING_PCM_FLOAT
                 ).coerceAtLeast(4096)
 
-                val track = AudioTrack.Builder()
+                track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                     )
@@ -203,6 +258,8 @@ class LunaTtsEngine private constructor(context: Context) {
                 activeAudioTrack = track
                 track.play()
 
+                var totalSamplesPlayed = 0
+
                 for (sentence in sentences) {
                     if (!isActive) break
                     val trimmed = sentence.trim()
@@ -214,22 +271,44 @@ class LunaTtsEngine private constructor(context: Context) {
                         speed
                     )
                     val samples = generated.samples
-                    if (samples.isNotEmpty() && isActive) {
+                    if (samples != null && samples.isNotEmpty() && isActive) {
                         var offset = 0
-                        val chunkLen = 2048
+                        val chunkLen = 1024 // ~46ms chunks for responsive 20fps equalizer animation
                         while (offset < samples.size && isActive) {
                             val count = minOf(chunkLen, samples.size - offset)
                             var sumSq = 0.0
+                            val bandAccum = FloatArray(5)
+                            val bandBucketSize = (count / 5).coerceAtLeast(1)
+
                             for (i in 0 until count) {
                                 val s = samples[offset + i]
                                 sumSq += s * s
+                                val bandIdx = (i / bandBucketSize).coerceIn(0, 4)
+                                bandAccum[bandIdx] += abs(s)
                             }
-                            val rms = (sqrt(sumSq / count).toFloat() * 4.5f).coerceIn(0.05f, 1.0f)
-                            _outputRms.value = rms
-                            track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
+
+                            val rms = (sqrt(sumSq / count).toFloat() * 4.8f).coerceIn(0.08f, 1.0f)
+                            _outputRms.value = _outputRms.value * 0.3f + rms * 0.7f
+
+                            val prevBands = _outputWaveBands.value
+                            val nextBands = FloatArray(5) { idx ->
+                                val avg = (bandAccum[idx] / bandBucketSize) * 6.2f
+                                (prevBands[idx] * 0.3f + avg * 0.7f).coerceIn(0.08f, 1.0f)
+                            }
+                            _outputWaveBands.value = nextBands
+
+                            val written = track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
+                            if (written > 0) {
+                                totalSamplesPlayed += written
+                            }
                             offset += count
                         }
                     }
+                }
+
+                // Wait briefly for the hardware AudioTrack buffer to drain its final samples
+                if (totalSamplesPlayed > 0 && isActive) {
+                    delay(180)
                 }
 
                 runCatching {
@@ -239,13 +318,17 @@ class LunaTtsEngine private constructor(context: Context) {
                 if (activeAudioTrack === track) {
                     activeAudioTrack = null
                 }
-                _isSpeaking.value = false
-                _outputRms.value = 0f
-                true
+
+                totalSamplesPlayed > 0
             } catch (t: Throwable) {
                 Log.w(TAG, "Neural ONNX TTS failed (${t.message}), falling back to system female TTS", t)
-                _isSpeaking.value = false
-                _outputRms.value = 0f
+                runCatching {
+                    track?.stop()
+                    track?.release()
+                }
+                if (activeAudioTrack === track) {
+                    activeAudioTrack = null
+                }
                 false
             }
         }
@@ -256,15 +339,17 @@ class LunaTtsEngine private constructor(context: Context) {
         settings: LunaSettings
     ): OfflineTts? {
         val profile = NpuHardwareManager.detectHardwareProfile(appContext)
-        val provider = NpuHardwareManager.resolveSherpaOnnxProvider(settings.hardwareAccelerator, profile)
-        val threads = profile.recommendedCpuThreads
+        val threads = profile.recommendedCpuThreads.coerceIn(2, 4)
+        // Always use multi-threaded ARM64 XNNPACK ("cpu") for Sherpa-ONNX VITS/Kokoro synthesis
+        // because Android NNAPI rejects dynamic-shape phoneme/noise ops at runtime.
+        val provider = "cpu"
 
         // 1. Check Custom User-Trained Female Voice Model Slot first
         if (settings.useCustomTtsModel && settings.customTtsModelPath.isNotBlank()) {
             val customModelFile = File(settings.customTtsModelPath)
             val customTokensFile = File(settings.customTtsTokensPath)
             if (customModelFile.exists() && customTokensFile.exists()) {
-                val sig = "custom:${customModelFile.absolutePath}:${customTokensFile.absolutePath}:$provider"
+                val sig = "custom:${customModelFile.absolutePath}:${customTokensFile.absolutePath}"
                 if (loadedModelSignature == sig && activeOfflineTts != null) {
                     return activeOfflineTts
                 }
@@ -291,7 +376,7 @@ class LunaTtsEngine private constructor(context: Context) {
             }
         }
 
-        // 2. Check User's Selected Active Voice first, then language-matched fallbacks
+        // 2. Build ordered candidate list: user's selected active voice first, then language-matched models, then any installed TTS model
         val selectedModelId = when (settings.selectedTtsVoice) {
             TtsVoiceModelId.PIPER_EN_AMY -> LocalModelId.TTS_PIPER_EN_AMY
             TtsVoiceModelId.KOKORO_EN_HEART -> LocalModelId.TTS_KOKORO_EN_HEART
@@ -299,133 +384,101 @@ class LunaTtsEngine private constructor(context: Context) {
             TtsVoiceModelId.PIPER_DE_KERSTIN -> LocalModelId.TTS_PIPER_DE_KERSTIN
             else -> null
         }
+
         val isDe = langCode.startsWith("de")
-        if (isDe) {
-            val preferredDe = when (settings.preferredGermanTts) {
-                TtsVoiceModelId.PIPER_DE_KERSTIN -> LocalModelId.TTS_PIPER_DE_KERSTIN
-                else -> LocalModelId.TTS_PIPER_DE_DII
+        val candidates = buildList {
+            if (isDe) {
+                selectedModelId?.takeIf { it == LocalModelId.TTS_PIPER_DE_DII || it == LocalModelId.TTS_PIPER_DE_KERSTIN }?.let { add(it) }
+                add(LocalModelId.TTS_PIPER_DE_DII)
+                add(LocalModelId.TTS_PIPER_DE_KERSTIN)
+                selectedModelId?.let { add(it) }
+                add(LocalModelId.TTS_PIPER_EN_AMY)
+                add(LocalModelId.TTS_KOKORO_EN_HEART)
+            } else {
+                selectedModelId?.takeIf { it == LocalModelId.TTS_PIPER_EN_AMY || it == LocalModelId.TTS_KOKORO_EN_HEART }?.let { add(it) }
+                add(LocalModelId.TTS_PIPER_EN_AMY)
+                add(LocalModelId.TTS_KOKORO_EN_HEART)
+                selectedModelId?.let { add(it) }
+                add(LocalModelId.TTS_PIPER_DE_DII)
+                add(LocalModelId.TTS_PIPER_DE_KERSTIN)
             }
-            val deCandidates = listOfNotNull(
-                selectedModelId?.takeIf { it == LocalModelId.TTS_PIPER_DE_DII || it == LocalModelId.TTS_PIPER_DE_KERSTIN },
-                preferredDe,
-                LocalModelId.TTS_PIPER_DE_DII,
-                LocalModelId.TTS_PIPER_DE_KERSTIN
-            ).distinct()
+        }.distinct()
 
-            for (candidate in deCandidates) {
-                if (LocalModelStorage.isModelDownloaded(appContext, candidate)) {
-                    val root = LocalModelStorage.modelRootDir(appContext, candidate)
-                    val subDir = if (candidate == LocalModelId.TTS_PIPER_DE_DII) {
-                        File(root, "vits-piper-de_DE-dii-high")
-                    } else {
-                        File(root, "vits-piper-de_DE-kerstin-low")
-                    }
-                    val onnxName = if (candidate == LocalModelId.TTS_PIPER_DE_DII) {
-                        "de_DE-dii-high.onnx"
-                    } else {
-                        "de_DE-kerstin-low.onnx"
-                    }
-                    val modelFile = File(subDir, onnxName)
-                    val tokensFile = File(subDir, "tokens.txt")
-                    val dataDir = File(subDir, "espeak-ng-data")
-                    if (modelFile.exists() && tokensFile.exists()) {
-                        val sig = "vits:${modelFile.absolutePath}:$provider"
-                        if (loadedModelSignature == sig && activeOfflineTts != null) {
-                            return activeOfflineTts
-                        }
-                        val vits = OfflineTtsVitsModelConfig(
-                            model = modelFile.absolutePath,
-                            lexicon = "",
-                            tokens = tokensFile.absolutePath,
-                            dataDir = if (dataDir.exists()) dataDir.absolutePath else "",
-                            dictDir = "",
-                            noiseScale = 0.667f,
-                            noiseScaleW = 0.8f,
-                            lengthScale = 1.0f
-                        )
-                        return instantiateOfflineTts(
-                            sig = sig,
-                            vits = vits,
-                            kokoro = OfflineTtsKokoroModelConfig(),
-                            threads = threads,
-                            provider = provider
-                        )
-                    }
-                }
-            }
-        } else {
-            val preferredEn = when (settings.preferredEnglishTts) {
-                TtsVoiceModelId.KOKORO_EN_HEART -> LocalModelId.TTS_KOKORO_EN_HEART
-                else -> LocalModelId.TTS_PIPER_EN_AMY
-            }
-            val enCandidates = listOfNotNull(
-                selectedModelId?.takeIf { it == LocalModelId.TTS_PIPER_EN_AMY || it == LocalModelId.TTS_KOKORO_EN_HEART },
-                preferredEn,
-                LocalModelId.TTS_PIPER_EN_AMY,
-                LocalModelId.TTS_KOKORO_EN_HEART
-            ).distinct()
+        for (candidate in candidates) {
+            if (!LocalModelStorage.isModelDownloaded(appContext, candidate)) continue
+            val root = LocalModelStorage.modelRootDir(appContext, candidate)
+            val onnxFile = findFileRecursively(root) { it.isFile && it.name.endsWith(".onnx") } ?: continue
+            val modelDir = onnxFile.parentFile ?: root
+            val tokensFile = File(modelDir, "tokens.txt").takeIf { it.exists() }
+                ?: findFileRecursively(root) { it.isFile && it.name == "tokens.txt" }
+                ?: continue
+            val dataDir = File(modelDir, "espeak-ng-data").takeIf { it.isDirectory }
+                ?: findFileRecursively(root) { it.isDirectory && it.name == "espeak-ng-data" }
 
-            for (candidate in enCandidates) {
-                if (!LocalModelStorage.isModelDownloaded(appContext, candidate)) continue
-                val root = LocalModelStorage.modelRootDir(appContext, candidate)
-                if (candidate == LocalModelId.TTS_KOKORO_EN_HEART) {
-                    val subDir = File(root, "kokoro-int8-en-v0_19")
-                    val modelFile = File(subDir, "model.int8.onnx")
-                    val voicesFile = File(subDir, "voices.bin")
-                    val tokensFile = File(subDir, "tokens.txt")
-                    val dataDir = File(subDir, "espeak-ng-data")
-                    if (modelFile.exists() && voicesFile.exists() && tokensFile.exists()) {
-                        val sig = "kokoro:${modelFile.absolutePath}:$provider"
-                        if (loadedModelSignature == sig && activeOfflineTts != null) {
-                            return activeOfflineTts
-                        }
-                        val kokoro = OfflineTtsKokoroModelConfig(
-                            model = modelFile.absolutePath,
-                            voices = voicesFile.absolutePath,
-                            tokens = tokensFile.absolutePath,
-                            dataDir = if (dataDir.exists()) dataDir.absolutePath else "",
-                            lexicon = "",
-                            lang = "",
-                            dictDir = "",
-                            lengthScale = 1.0f
-                        )
-                        return instantiateOfflineTts(
-                            sig = sig,
-                            vits = OfflineTtsVitsModelConfig(),
-                            kokoro = kokoro,
-                            threads = threads,
-                            provider = provider
-                        )
-                    }
-                } else {
-                    val subDir = File(root, "vits-piper-en_US-amy-medium")
-                    val modelFile = File(subDir, "en_US-amy-medium.onnx")
-                    val tokensFile = File(subDir, "tokens.txt")
-                    val dataDir = File(subDir, "espeak-ng-data")
-                    if (modelFile.exists() && tokensFile.exists()) {
-                        val sig = "vits:${modelFile.absolutePath}:$provider"
-                        if (loadedModelSignature == sig && activeOfflineTts != null) {
-                            return activeOfflineTts
-                        }
-                        val vits = OfflineTtsVitsModelConfig(
-                            model = modelFile.absolutePath,
-                            lexicon = "",
-                            tokens = tokensFile.absolutePath,
-                            dataDir = if (dataDir.exists()) dataDir.absolutePath else "",
-                            dictDir = "",
-                            noiseScale = 0.667f,
-                            noiseScaleW = 0.8f,
-                            lengthScale = 1.0f
-                        )
-                        return instantiateOfflineTts(
-                            sig = sig,
-                            vits = vits,
-                            kokoro = OfflineTtsKokoroModelConfig(),
-                            threads = threads,
-                            provider = provider
-                        )
-                    }
+            if (candidate == LocalModelId.TTS_KOKORO_EN_HEART) {
+                val voicesFile = File(modelDir, "voices.bin").takeIf { it.exists() }
+                    ?: findFileRecursively(root) { it.isFile && it.name == "voices.bin" }
+                    ?: continue
+                val sig = "kokoro:${onnxFile.absolutePath}"
+                if (loadedModelSignature == sig && activeOfflineTts != null) {
+                    return activeOfflineTts
                 }
+                val kokoro = OfflineTtsKokoroModelConfig(
+                    model = onnxFile.absolutePath,
+                    voices = voicesFile.absolutePath,
+                    tokens = tokensFile.absolutePath,
+                    dataDir = dataDir?.absolutePath ?: "",
+                    lexicon = "",
+                    lang = "",
+                    dictDir = "",
+                    lengthScale = 1.0f
+                )
+                val loaded = instantiateOfflineTts(
+                    sig = sig,
+                    vits = OfflineTtsVitsModelConfig(),
+                    kokoro = kokoro,
+                    threads = threads,
+                    provider = provider
+                )
+                if (loaded != null) return loaded
+            } else {
+                val sig = "vits:${onnxFile.absolutePath}"
+                if (loadedModelSignature == sig && activeOfflineTts != null) {
+                    return activeOfflineTts
+                }
+                val vits = OfflineTtsVitsModelConfig(
+                    model = onnxFile.absolutePath,
+                    lexicon = "",
+                    tokens = tokensFile.absolutePath,
+                    dataDir = dataDir?.absolutePath ?: "",
+                    dictDir = "",
+                    noiseScale = 0.667f,
+                    noiseScaleW = 0.8f,
+                    lengthScale = 1.0f
+                )
+                val loaded = instantiateOfflineTts(
+                    sig = sig,
+                    vits = vits,
+                    kokoro = OfflineTtsKokoroModelConfig(),
+                    threads = threads,
+                    provider = provider
+                )
+                if (loaded != null) return loaded
+            }
+        }
+        return null
+    }
+
+    private fun findFileRecursively(dir: File, predicate: (File) -> Boolean): File? {
+        if (!dir.exists()) return null
+        val children = dir.listFiles() ?: return null
+        for (child in children) {
+            if (predicate(child)) return child
+        }
+        for (child in children) {
+            if (child.isDirectory) {
+                val found = findFileRecursively(child, predicate)
+                if (found != null) return found
             }
         }
         return null
@@ -442,60 +495,70 @@ class LunaTtsEngine private constructor(context: Context) {
         activeOfflineTts = null
         loadedModelSignature = null
 
-        // Try with requested provider (e.g. "nnapi" for NPU/GPU), and fallback to "cpu" if NNAPI rejects dynamic ops
-        val providersToTry = if (provider != "cpu") listOf(provider, "cpu") else listOf("cpu")
-        for (prov in providersToTry) {
-            try {
-                val modelConfig = OfflineTtsModelConfig().apply {
-                    this.vits = vits
-                    this.kokoro = kokoro
-                    this.numThreads = threads
-                    this.debug = false
-                    this.provider = prov
-                }
-                val config = OfflineTtsConfig().apply {
-                    this.model = modelConfig
-                    this.maxNumSentences = 1
-                }
-                val instance = OfflineTts(assetManager = null, config = config)
-                activeOfflineTts = instance
-                loadedModelSignature = sig
-                return instance
-            } catch (t: Throwable) {
-                Log.w(TAG, "Failed to init OfflineTts with provider=$prov: ${t.message}")
+        return try {
+            val modelConfig = OfflineTtsModelConfig().apply {
+                this.vits = vits
+                this.kokoro = kokoro
+                this.numThreads = threads
+                this.debug = false
+                this.provider = provider
             }
+            val config = OfflineTtsConfig().apply {
+                this.model = modelConfig
+                this.maxNumSentences = 1
+            }
+            val instance = OfflineTts(assetManager = null, config = config)
+            activeOfflineTts = instance
+            loadedModelSignature = sig
+            instance
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to init OfflineTts: ${t.message}", t)
+            null
         }
-        return null
     }
 
     private fun findFallbackEspeakDataDir(): String? {
-        val candidates = listOf(
-            LocalModelId.TTS_PIPER_EN_AMY to "vits-piper-en_US-amy-medium/espeak-ng-data",
-            LocalModelId.TTS_PIPER_DE_DII to "vits-piper-de_DE-dii-high/espeak-ng-data",
-            LocalModelId.TTS_PIPER_DE_KERSTIN to "vits-piper-de_DE-kerstin-low/espeak-ng-data",
-            LocalModelId.TTS_KOKORO_EN_HEART to "kokoro-int8-en-v0_19/espeak-ng-data"
+        val models = listOf(
+            LocalModelId.TTS_PIPER_DE_DII,
+            LocalModelId.TTS_PIPER_DE_KERSTIN,
+            LocalModelId.TTS_PIPER_EN_AMY,
+            LocalModelId.TTS_KOKORO_EN_HEART
         )
-        for ((model, rel) in candidates) {
-            val dir = File(LocalModelStorage.modelRootDir(appContext, model), rel)
-            if (dir.exists() && dir.isDirectory) {
-                return dir.absolutePath
-            }
+        for (model in models) {
+            val root = LocalModelStorage.modelRootDir(appContext, model)
+            val found = findFileRecursively(root) { it.isDirectory && it.name == "espeak-ng-data" }
+            if (found != null) return found.absolutePath
         }
         return null
     }
 
-    private fun speakWithAndroidFemaleFallback(
+    private suspend fun speakWithAndroidFemaleFallbackAndAwait(
         cleanText: String,
         langCode: String,
         settings: LunaSettings
     ) {
+        // Wait up to 1.5s if Android TextToSpeech is still initializing on cold start
+        var waitInitMs = 0L
+        while (!androidTtsReady && waitInitMs < 1500L) {
+            delay(50)
+            waitInitMs += 50L
+        }
         val tts = androidTts ?: return
         if (!androidTtsReady) return
 
+        val utteranceId = UUID.randomUUID().toString()
+        val deferred = CompletableDeferred<Unit>()
+        utteranceWaiters[utteranceId] = deferred
+
         val targetLocale = if (langCode.startsWith("de")) Locale.GERMANY else Locale.US
-        runCatching {
+        val started = runCatching {
+            tts.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
             tts.language = targetLocale
-            // Select a female voice if available on the device
             val voices = tts.voices
             if (voices != null) {
                 val langVoices = voices.filter {
@@ -513,7 +576,37 @@ class LunaTtsEngine private constructor(context: Context) {
             }
             tts.setSpeechRate(settings.ttsSpeed.coerceIn(0.6f, 1.8f))
             tts.setPitch(settings.ttsPitch.coerceIn(0.8f, 1.4f))
-            tts.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
+            val res = tts.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+            res == TextToSpeech.SUCCESS
+        }.getOrDefault(false)
+
+        if (!started) {
+            utteranceWaiters.remove(utteranceId)
+            return
+        }
+
+        // Animate `_outputRms` and `_outputWaveBands` while Android system TTS is speaking
+        // so the light-blue equalizer bars react smoothly just like neural TTS!
+        val animJob = scope.launch {
+            var tick = 0f
+            while (isActive && !deferred.isCompleted) {
+                tick += 0.35f
+                val simRms = (0.42f + 0.28f * abs(sin(tick))).coerceIn(0.20f, 0.85f)
+                _outputRms.value = simRms
+                _outputWaveBands.value = FloatArray(5) { idx ->
+                    (0.30f + 0.55f * abs(sin(tick + idx * 0.7f))).coerceIn(0.15f, 0.92f)
+                }
+                delay(45)
+            }
+        }
+
+        try {
+            withTimeoutOrNull(45_000L) {
+                deferred.await()
+            }
+        } finally {
+            animJob.cancel()
+            utteranceWaiters.remove(utteranceId)
         }
     }
 

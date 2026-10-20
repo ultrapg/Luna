@@ -416,19 +416,14 @@ object LunaAssistantController {
                 executedTools = result.executedToolsSummary,
                 statusBadge = ""
             )
-            ttsEngine.speak(result.replyText, detectedLanguage)
-            // Wait for TTS to start and finish speaking, then auto-hide the bubble
-            delay(350)
-            var waitedMs = 0L
-            while (ttsEngine.isSpeaking.value && waitedMs < 60_000L) {
-                delay(150)
-                waitedMs += 150L
-            }
+            // Suspend until the entire TTS synthesis & playback completes
+            ttsEngine.speakAndAwait(result.replyText, detectedLanguage)
             _liveState.value = _liveState.value.copy(
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
                 statusBadge = ""
             )
             if (_liveState.value.isVisible) {
+                delay(200)
                 dismissOverlay(appContext)
             }
         } else {
