@@ -19,7 +19,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -75,7 +74,6 @@ fun ChatsScreen(
     var showHistorySheet by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-
     val isGerman = settings.appLanguage.isGerman
 
     LaunchedEffect(messages.size) {
@@ -94,111 +92,116 @@ fun ChatsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Top Action Bar
-        Surface(
-            tonalElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth()
+        // Minimal Top Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                FilledTonalIconButton(
+                    onClick = { showHistorySheet = true },
+                    modifier = Modifier.size(38.dp)
                 ) {
-                    FilledTonalIconButton(onClick = { showHistorySheet = true }) {
-                        Icon(
-                            imageVector = Icons.Default.History,
-                            contentDescription = if (isGerman) "Chatverlauf" else "Chat History"
-                        )
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = "History",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = sessions.firstOrNull { it.id == selectedSessionId }?.title
+                            ?: "Luna",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${settings.openAiModel} • ${settings.hardwareAccelerator.shortLabel}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = {
+                        LunaSettingsRepository.update(context) { it.copy(ttsEnabled = !it.ttsEnabled) }
                     }
-                    Column {
-                        Text(
-                            text = sessions.firstOrNull { it.id == selectedSessionId }?.title
-                                ?: if (isGerman) "Neues Gespräch mit Luna" else "New Chat with Luna",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 180.dp)
-                        )
-                        Text(
-                            text = "${settings.openAiModel} • ${settings.hardwareAccelerator.shortLabel}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                ) {
+                    Icon(
+                        imageVector = if (settings.ttsEnabled) {
+                            Icons.AutoMirrored.Filled.VolumeUp
+                        } else {
+                            Icons.AutoMirrored.Filled.VolumeOff
+                        },
+                        contentDescription = "TTS",
+                        tint = if (settings.ttsEnabled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Toggle TTS output
-                    IconButton(
-                        onClick = {
-                            LunaSettingsRepository.update(context) { it.copy(ttsEnabled = !it.ttsEnabled) }
+                IconButton(
+                    onClick = {
+                        if (onRequestMicPermission()) {
+                            LunaOverlayService.startOrTrigger(context, startListening = true)
                         }
-                    ) {
-                        Icon(
-                            imageVector = if (settings.ttsEnabled) {
-                                Icons.AutoMirrored.Filled.VolumeUp
-                            } else {
-                                Icons.AutoMirrored.Filled.VolumeOff
-                            },
-                            contentDescription = "TTS",
-                            tint = if (settings.ttsEnabled) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                        )
                     }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SmartButton,
+                        contentDescription = "Launch Pill"
+                    )
+                }
 
-                    // Spawn Floating Pill Overlay
-                    FilledTonalIconButton(
-                        onClick = {
-                            if (onRequestMicPermission()) {
-                                LunaOverlayService.startOrTrigger(context, startListening = true)
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.BubbleChart,
-                            contentDescription = if (isGerman) "Seiten-Bubble starten" else "Launch Side Bubble"
-                        )
-                    }
-
-                    // New Chat
-                    FilledIconButton(
-                        onClick = {
-                            selectedSessionId = null
-                            LunaAssistantController.startNewSession()
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = if (isGerman) "Neuer Chat" else "New Chat"
-                        )
-                    }
+                FilledTonalIconButton(
+                    onClick = {
+                        selectedSessionId = null
+                        LunaAssistantController.startNewSession()
+                    },
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "New Chat",
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }
 
-        // Live Assistant Status Banner when active
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+        // Compact Status Pill when active
         AnimatedVisibility(visible = isBusy) {
             Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
+                color = Color(0xFF151821),
+                shape = RoundedCornerShape(50),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(16.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -208,46 +211,43 @@ fun ChatsScreen(
                         modifier = Modifier.weight(1f)
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.5.dp
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
                         )
-                        Column {
-                            Text(
-                                text = when (uiState.phase) {
-                                    AssistantOverlayPhase.LISTENING -> if (isGerman) "Luna hört zu (EAR + VOZ)..." else "Luna is listening (EAR + VOZ)..."
-                                    AssistantOverlayPhase.TRANSCRIBING -> if (isGerman) "Transkribiere auf NPU/Gerät..." else "Transcribing locally on device..."
-                                    AssistantOverlayPhase.THINKING -> uiState.statusBadge.ifBlank {
-                                        if (isGerman) "Luna denkt nach..." else "Luna is thinking..."
-                                    }
-                                    AssistantOverlayPhase.SPEAKING -> if (isGerman) "Luna spricht..." else "Luna is speaking..."
-                                    else -> ""
-                                },
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            if (uiState.detectedLanguage.isNotBlank()) {
-                                Text(
-                                    text = "Language: ${uiState.detectedLanguage.uppercase()}",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
-                        }
+                        Text(
+                            text = when (uiState.phase) {
+                                AssistantOverlayPhase.LISTENING -> if (isGerman) "Höre zu..." else "Listening..."
+                                AssistantOverlayPhase.TRANSCRIBING -> if (isGerman) "Transkribiere..." else "Transcribing..."
+                                AssistantOverlayPhase.THINKING -> uiState.statusBadge.ifBlank {
+                                    if (isGerman) "Denke nach..." else "Thinking..."
+                                }
+                                AssistantOverlayPhase.SPEAKING -> if (isGerman) "Spricht..." else "Speaking..."
+                                else -> ""
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
 
                     if (uiState.phase == AssistantOverlayPhase.LISTENING) {
-                        FilledTonalButton(onClick = { LunaAssistantController.finishListeningAndProcess(context) }) {
+                        TextButton(onClick = { LunaAssistantController.finishListeningAndProcess(context) }) {
                             Text(if (isGerman) "Fertig" else "Done")
                         }
                     } else {
-                        IconButton(onClick = { LunaAssistantController.cancelCurrentOperation(context) }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel")
+                        IconButton(
+                            onClick = { LunaAssistantController.cancelCurrentOperation(context) },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.White)
                         }
                     }
                 }
             }
         }
 
-        // Chat Messages List
+        // Messages or Clean Empty State
         if (messages.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -258,76 +258,54 @@ fun ChatsScreen(
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(72.dp)
+                            .size(56.dp)
                             .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(
-                                        Color(0xFF4285F4),
-                                        Color(0xFF9B72CB),
-                                        Color(0xFFD96570)
-                                    )
-                                )
-                            ),
+                            .background(Color(0xFF1E2433)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
                         )
                     }
-                    Text(
-                        text = if (isGerman) "Hallo, ich bin Luna" else "Hi, I'm Luna",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "Dein lokaler Sprachassistent (Deutsch & Englisch) mit NPU-Beschleunigung, Web-Suche, Android-Steuerung und Gemini-Seiten-Bubble."
-                        } else {
-                            "Your NPU-accelerated voice assistant (English & German) with Android hardware control, DuckDuckGo web grounding, MCP tools, and Gemini side-pill overlay."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Luna",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
                     val suggestions = if (isGerman) {
                         listOf(
-                            "Schalte die Taschenlampe ein",
-                            "Wie ist mein Akkustand?",
-                            "Suche im Web nach aktuellen KI-News",
-                            "Merke dir, dass ich Kaffee ohne Zucker trinke"
+                            "Taschenlampe einschalten",
+                            "Akkustand prüfen",
+                            "KI-News im Web suchen"
                         )
                     } else {
                         listOf(
                             "Turn on the flashlight",
-                            "Check my battery & NPU status",
-                            "Search DuckDuckGo for latest Android news",
-                            "Remember that I prefer dark mode and espresso"
+                            "Check battery status",
+                            "Search web for AI news"
                         )
                     }
 
-                    suggestions.forEach { prompt ->
-                        SuggestionChip(
-                            onClick = { LunaAssistantController.submitTextFromOverlay(context, prompt) },
-                            label = { Text(prompt) },
-                            icon = {
-                                Icon(
-                                    Icons.Default.Bolt,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        suggestions.forEach { prompt ->
+                            SuggestionChip(
+                                onClick = { LunaAssistantController.submitTextFromOverlay(context, prompt) },
+                                label = { Text(prompt) },
+                                shape = RoundedCornerShape(50)
+                            )
+                        }
                     }
                 }
             }
@@ -338,7 +316,7 @@ fun ChatsScreen(
                     .weight(1f)
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(items = messages, key = { it.id }) { msg ->
                     ChatMessageBubble(msg = msg)
@@ -346,85 +324,82 @@ fun ChatsScreen(
             }
         }
 
-        // Bottom Voice & Text Composer
-        Surface(
-            tonalElevation = 4.dp,
-            modifier = Modifier.fillMaxWidth()
+        // Clean Gemini-Style Bottom Pill Composer
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Voice Input Button (Desert Ant EAR + VOZ)
-                FloatingActionButton(
-                    onClick = {
-                        if (onRequestMicPermission()) {
-                            if (uiState.phase == AssistantOverlayPhase.LISTENING) {
-                                LunaAssistantController.finishListeningAndProcess(context)
-                            } else {
-                                LunaAssistantController.startVoiceListening(context)
-                            }
-                        }
-                    },
-                    containerColor = if (uiState.phase == AssistantOverlayPhase.LISTENING) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primaryContainer
-                    },
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = if (uiState.phase == AssistantOverlayPhase.LISTENING) {
-                            Icons.Default.Stop
+            IconButton(
+                onClick = {
+                    if (onRequestMicPermission()) {
+                        if (uiState.phase == AssistantOverlayPhase.LISTENING) {
+                            LunaAssistantController.finishListeningAndProcess(context)
                         } else {
-                            Icons.Default.Mic
-                        },
-                        contentDescription = "Voice Input"
-                    )
-                }
-
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    placeholder = {
-                        Text(
-                            if (isGerman) "Frage Luna oder sprich (DE/EN)..."
-                            else "Ask Luna anything or speak (EN/DE)..."
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(24.dp),
-                    maxLines = 4
-                )
-
-                FilledIconButton(
-                    onClick = {
-                        val trimmed = inputText.trim()
-                        if (trimmed.isNotEmpty()) {
-                            inputText = ""
-                            LunaAssistantController.submitTextFromOverlay(context, trimmed)
+                            LunaAssistantController.startVoiceListening(context)
                         }
-                    },
-                    enabled = inputText.isNotBlank() && !isBusy,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send"
+                    }
+                },
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (uiState.phase == AssistantOverlayPhase.LISTENING) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            Color(0xFF2B5CAD)
+                        }
                     )
-                }
+            ) {
+                Icon(
+                    imageVector = if (uiState.phase == AssistantOverlayPhase.LISTENING) {
+                        Icons.Default.Stop
+                    } else {
+                        Icons.Default.Mic
+                    },
+                    contentDescription = "Voice",
+                    tint = Color.White
+                )
+            }
+
+            OutlinedTextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                placeholder = {
+                    Text(
+                        text = if (isGerman) "Frage Luna..." else "Ask Luna...",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(50),
+                singleLine = true
+            )
+
+            FilledIconButton(
+                onClick = {
+                    val trimmed = inputText.trim()
+                    if (trimmed.isNotEmpty()) {
+                        inputText = ""
+                        LunaAssistantController.submitTextFromOverlay(context, trimmed)
+                    }
+                },
+                enabled = inputText.isNotBlank() && !isBusy,
+                modifier = Modifier.size(46.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send"
+                )
             }
         }
     }
 
-    // Chat History Modal Bottom Sheet (View, Continue, or Delete Previous Chats)
     if (showHistorySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showHistorySheet = false }
-        ) {
+        ModalBottomSheet(onDismissRequest = { showHistorySheet = false }) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -436,8 +411,8 @@ fun ChatsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isGerman) "Vorherige Gespräche" else "Previous Chats",
-                        style = MaterialTheme.typography.titleLarge,
+                        text = if (isGerman) "Chatverlauf" else "Chat History",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     if (sessions.isNotEmpty()) {
@@ -450,9 +425,7 @@ fun ChatsScreen(
                                 }
                             }
                         ) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = null)
-                            Spacer(Modifier.width(4.dp))
-                            Text(if (isGerman) "Alle löschen" else "Delete All")
+                            Text(if (isGerman) "Alle löschen" else "Clear All")
                         }
                     }
                 }
@@ -463,11 +436,11 @@ fun ChatsScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(32.dp),
+                            .padding(28.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = if (isGerman) "Noch keine gespeicherten Chats." else "No saved chats yet.",
+                            text = if (isGerman) "Keine Chats vorhanden" else "No saved chats",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -475,7 +448,7 @@ fun ChatsScreen(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 420.dp),
+                            .heightIn(max = 400.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(items = sessions, key = { it.id }) { session ->
@@ -534,30 +507,29 @@ private fun ChatMessageBubble(msg: ChatMessageEntity) {
 
         Surface(
             color = if (isUser) {
-                MaterialTheme.colorScheme.primary
+                MaterialTheme.colorScheme.primaryContainer
             } else {
                 MaterialTheme.colorScheme.surfaceVariant
             },
             contentColor = if (isUser) {
-                MaterialTheme.colorScheme.onPrimary
+                MaterialTheme.colorScheme.onPrimaryContainer
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
             shape = RoundedCornerShape(
-                topStart = 18.dp,
-                topEnd = 18.dp,
-                bottomStart = if (isUser) 18.dp else 4.dp,
-                bottomEnd = if (isUser) 4.dp else 18.dp
+                topStart = 20.dp,
+                topEnd = 20.dp,
+                bottomStart = if (isUser) 20.dp else 6.dp,
+                bottomEnd = if (isUser) 6.dp else 20.dp
             ),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.widthIn(max = 310.dp)
         ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(
-                    text = msg.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    lineHeight = 20.sp
-                )
-            }
+            Text(
+                text = msg.content,
+                style = MaterialTheme.typography.bodyMedium,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            )
         }
     }
 }
@@ -569,18 +541,17 @@ private fun SessionHistoryCard(
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
-    Card(
+    val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
             .clickable { onSelect() },
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            }
-        )
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        }
     ) {
         Row(
             modifier = Modifier
@@ -589,24 +560,24 @@ private fun SessionHistoryCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(
                     text = session.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${dateFormat.format(Date(session.updatedAt))} • ${session.modelUsed}",
+                    text = dateFormat.format(Date(session.updatedAt)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             IconButton(onClick = onDelete) {
                 Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete chat",
+                    imageVector = Icons.Default.DeleteOutline,
+                    contentDescription = "Delete",
                     tint = MaterialTheme.colorScheme.error
                 )
             }

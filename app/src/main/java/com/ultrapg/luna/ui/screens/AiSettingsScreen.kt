@@ -1,7 +1,9 @@
 package com.ultrapg.luna.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ultrapg.luna.core.hardware.NpuHardwareManager
 import com.ultrapg.luna.core.llm.OpenAiAgentEngine
@@ -30,7 +33,6 @@ fun AiSettingsScreen() {
     val settings by LunaSettingsRepository.settingsFlow.collectAsState()
     val hwProfile = remember { NpuHardwareManager.detectHardwareProfile(context) }
     val scrollState = rememberScrollState()
-
     val isGerman = settings.appLanguage.isGerman
 
     var baseUrlInput by remember(settings.openAiBaseUrl) { mutableStateOf(settings.openAiBaseUrl) }
@@ -50,66 +52,48 @@ fun AiSettingsScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Section 1: OpenAI-Compatible API Connection & Editable Model Dropdown
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 1. OpenAI-Compatible API Card
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CloudSync,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "OpenAI-Kompatible API (LLM-Backend)"
-                        } else {
-                            "OpenAI-Compatible API (LLM Backend)"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
                 Text(
-                    text = if (isGerman) {
-                        "Verbinde jeden OpenAI-kompatiblen Endpunkt (OpenAI, OpenRouter, Groq, DeepSeek, Ollama, vLLM, LM Studio). Du kannst das Modell frei eintippen (auch wenn es nicht in der Liste ist) oder aus dem Dropdown wählen."
-                    } else {
-                        "Connect any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, DeepSeek, Ollama, vLLM, LM Studio). Type any custom model ID directly (even if unlisted) or select from the dropdown."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "OpenAI API",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
 
-                // Base URL
                 OutlinedTextField(
                     value = baseUrlInput,
                     onValueChange = { newUrl ->
                         baseUrlInput = newUrl
                         LunaSettingsRepository.update(context) { s -> s.copy(openAiBaseUrl = newUrl) }
                     },
-                    label = { Text("API Base URL") },
+                    label = { Text("Base URL", maxLines = 1) },
                     placeholder = { Text("https://api.openai.com/v1") },
                     singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) },
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Quick Endpoint Presets
+                // Horizontally scrollable preset chips (Never wraps vertically!)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val presets = listOf(
                         "OpenAI" to "https://api.openai.com/v1",
                         "OpenRouter" to "https://openrouter.ai/api/v1",
                         "Groq" to "https://api.groq.com/openai/v1",
-                        "DeepSeek" to "https://api.deepseek.com/v1"
+                        "DeepSeek" to "https://api.deepseek.com/v1",
+                        "Ollama" to "http://127.0.0.1:11434/v1"
                     )
                     presets.forEach { (name, url) ->
                         SuggestionChip(
@@ -117,32 +101,32 @@ fun AiSettingsScreen() {
                                 baseUrlInput = url
                                 LunaSettingsRepository.update(context) { it.copy(openAiBaseUrl = url) }
                             },
-                            label = { Text(name, style = MaterialTheme.typography.labelSmall) }
+                            label = { Text(name, maxLines = 1) },
+                            shape = RoundedCornerShape(50)
                         )
                     }
                 }
 
-                // API Key
                 OutlinedTextField(
                     value = apiKeyInput,
                     onValueChange = { newKey ->
                         apiKeyInput = newKey
                         LunaSettingsRepository.update(context) { s -> s.copy(openAiApiKey = newKey) }
                     },
-                    label = { Text(if (isGerman) "API-Schlüssel (API Key)" else "API Key") },
+                    label = { Text("API Key", maxLines = 1) },
                     placeholder = { Text("sk-...") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     visualTransformation = if (showApiKey) {
                         VisualTransformation.None
                     } else {
                         PasswordVisualTransformation()
                     },
-                    leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
                     trailingIcon = {
                         IconButton(onClick = { showApiKey = !showApiKey }) {
                             Icon(
                                 imageVector = if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = "Toggle API key visibility"
+                                contentDescription = "Visibility"
                             )
                         }
                     },
@@ -170,16 +154,12 @@ fun AiSettingsScreen() {
                         },
                         label = {
                             Text(
-                                if (isGerman) {
-                                    "Modell (Eintippen oder aus Dropdown wählen)"
-                                } else {
-                                    "Model (Type any ID or select from dropdown)"
-                                }
+                                text = if (isGerman) "Modell (Tippen oder wählen)" else "Model (Type or select)",
+                                maxLines = 1
                             )
                         },
-                        placeholder = { Text("gpt-4o-mini / claude-3-7-sonnet / llama-3.3-70b") },
                         singleLine = true,
-                        leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null) },
+                        shape = RoundedCornerShape(12.dp),
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded)
                         },
@@ -203,16 +183,11 @@ fun AiSettingsScreen() {
                         expanded = modelDropdownExpanded,
                         onDismissRequest = { modelDropdownExpanded = false }
                     ) {
-                        // Always allow selecting the exact custom text typed by the user even if not in list
                         if (modelInput.isNotBlank() && !settings.availableModels.contains(modelInput.trim())) {
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        if (isGerman) {
-                                            "Benutzerdefiniert nutzen: \"${modelInput.trim()}\""
-                                        } else {
-                                            "Use custom model: \"${modelInput.trim()}\""
-                                        },
+                                        text = "\"${modelInput.trim()}\"",
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -253,58 +228,51 @@ fun AiSettingsScreen() {
                     }
                 }
 
-                // Fetch Models from /v1/models Button
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    FilledTonalButton(
-                        onClick = {
-                            scope.launch {
-                                isFetchingModels = true
-                                fetchStatusMessage = null
-                                val result = OpenAiAgentEngine.fetchAvailableModels(
-                                    baseUrl = baseUrlInput,
-                                    apiKey = apiKeyInput
-                                )
-                                isFetchingModels = false
-                                result.onSuccess { fetched ->
-                                    val merged = (
-                                        listOfNotNull(modelInput.trim().takeIf { it.isNotEmpty() }) +
-                                            fetched +
-                                            settings.availableModels
-                                        ).distinct()
-                                    LunaSettingsRepository.update(context) { s ->
-                                        s.copy(availableModels = merged)
-                                    }
-                                    fetchStatusMessage = if (isGerman) {
-                                        "${fetched.size} Modelle erfolgreich geladen"
-                                    } else {
-                                        "Loaded ${fetched.size} models from endpoint"
-                                    }
-                                    modelDropdownExpanded = true
-                                }.onFailure { err ->
-                                    fetchStatusMessage = err.message ?: "Failed to fetch models"
-                                }
-                            }
-                        },
-                        enabled = !isFetchingModels
-                    ) {
-                        if (isFetchingModels) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
+                FilledTonalButton(
+                    onClick = {
+                        scope.launch {
+                            isFetchingModels = true
+                            fetchStatusMessage = null
+                            val result = OpenAiAgentEngine.fetchAvailableModels(
+                                baseUrl = baseUrlInput,
+                                apiKey = apiKeyInput
                             )
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            isFetchingModels = false
+                            result.onSuccess { fetched ->
+                                val merged = (
+                                    listOfNotNull(modelInput.trim().takeIf { it.isNotEmpty() }) +
+                                        fetched +
+                                        settings.availableModels
+                                    ).distinct()
+                                LunaSettingsRepository.update(context) { s ->
+                                    s.copy(availableModels = merged)
+                                }
+                                fetchStatusMessage = if (isGerman) {
+                                    "${fetched.size} Modelle geladen"
+                                } else {
+                                    "Loaded ${fetched.size} models"
+                                }
+                                modelDropdownExpanded = true
+                            }.onFailure { err ->
+                                fetchStatusMessage = err.message ?: "Error"
+                            }
                         }
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (isGerman) "Verfügbare Modelle abrufen (/v1/models)"
-                            else "Fetch Models from Endpoint (/v1/models)"
-                        )
+                    },
+                    enabled = !isFetchingModels,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isFetchingModels) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isGerman) "Modelle vom Server abrufen" else "Fetch Available Models",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 if (fetchStatusMessage != null) {
@@ -315,21 +283,20 @@ fun AiSettingsScreen() {
                     )
                 }
 
-                // Temperature Slider
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = if (isGerman) "Kreativität (Temperature)" else "Temperature",
+                            text = "Temperature",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
                             text = String.format(Locale.US, "%.2f", settings.temperature),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                     Slider(
@@ -341,166 +308,97 @@ fun AiSettingsScreen() {
                     )
                 }
 
-                // Custom System Prompt
                 OutlinedTextField(
                     value = systemPromptInput,
                     onValueChange = { newPrompt ->
                         systemPromptInput = newPrompt
                         LunaSettingsRepository.update(context) { s -> s.copy(customSystemPrompt = newPrompt) }
                     },
-                    label = {
-                        Text(
-                            if (isGerman) "Zusätzlicher System-Prompt (Optional)"
-                            else "Custom System Prompt Instructions (Optional)"
-                        )
-                    },
-                    placeholder = {
-                        Text(
-                            if (isGerman) "z.B. Antworte immer kurz und direkt..."
-                            else "e.g. Keep answers under 2 sentences and speak casually..."
-                        )
-                    },
+                    label = { Text(if (isGerman) "System-Prompt (Optional)" else "System Prompt (Optional)", maxLines = 1) },
                     minLines = 2,
-                    maxLines = 5,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
         }
 
-        // Section 2: Language & Bilingual Mode (English & German)
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 2. Language & NPU Hardware Card
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Translate,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = if (isGerman) "Sprache (Deutsch & Englisch)" else "Language (English & German)",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
                 Text(
-                    text = if (isGerman) {
-                        "Desert Ant EAR erkennt automatisch, ob du Deutsch oder Englisch sprichst, und Luna antwortet in derselben Sprache."
-                    } else {
-                        "Desert Ant EAR automatically detects whether you speak English or German, and Luna replies in the matching language."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = if (isGerman) "Sprache" else "Language",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    AppLanguage.entries.forEach { lang ->
-                        FilterChip(
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    AppLanguage.entries.forEachIndexed { idx, lang ->
+                        SegmentedButton(
                             selected = settings.appLanguage == lang,
                             onClick = {
                                 LunaSettingsRepository.update(context) { it.copy(appLanguage = lang) }
                             },
-                            label = { Text(if (isGerman) lang.labelDe else lang.labelEn) }
-                        )
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = idx,
+                                count = AppLanguage.entries.size
+                            )
+                        ) {
+                            Text(
+                                text = if (isGerman) lang.labelDe else lang.labelEn,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
-            }
-        }
 
-        // Section 3: NPU / GPU / CPU Hardware Acceleration
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Memory,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
+                    Text(
+                        text = if (isGerman) "Hardware-Beschleunigung" else "Hardware Acceleration",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = if (isGerman) {
-                            "NPU / GPU / CPU Hardware-Beschleunigung"
-                        } else {
-                            "NPU / GPU / CPU Hardware Acceleration"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        text = "${String.format(Locale.US, "%.0f", hwProfile.totalRamGb)} GB RAM",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                }
-
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "SoC: ${hwProfile.socModel} (${hwProfile.vendor.displayName})",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "RAM: ${String.format(Locale.US, "%.1f", hwProfile.totalRamGb)} GB • NPU Arch: ${hwProfile.npuArchitecture}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text(
-                            text = "Active Runtime: ${hwProfile.summaryLabel}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
                 }
 
                 Text(
-                    text = if (isGerman) {
-                        "Bevorzugter Beschleuniger für lokale Spracherkennung (EAR + VOZ) und neuronale Sprachausgabe (TTS):"
-                    } else {
-                        "Preferred hardware accelerator for on-device speech recognition (EAR + VOZ) and neural TTS:"
-                    },
-                    style = MaterialTheme.typography.bodySmall
+                    text = "${hwProfile.vendor.displayName} • ${hwProfile.npuArchitecture}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
 
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    HardwareAccelerator.entries.forEach { acc ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = settings.hardwareAccelerator == acc,
-                                onClick = {
-                                    LunaSettingsRepository.update(context) { it.copy(hardwareAccelerator = acc) }
-                                }
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    HardwareAccelerator.entries.forEachIndexed { idx, acc ->
+                        SegmentedButton(
+                            selected = settings.hardwareAccelerator == acc,
+                            onClick = {
+                                LunaSettingsRepository.update(context) { it.copy(hardwareAccelerator = acc) }
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = idx,
+                                count = HardwareAccelerator.entries.size
                             )
-                            Column {
-                                Text(
-                                    text = if (isGerman) acc.displayNameDe else acc.displayNameEn,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = if (isGerman) acc.descDe else acc.descEn,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                        ) {
+                            Text(acc.shortLabel, maxLines = 1)
                         }
                     }
                 }

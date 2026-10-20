@@ -20,9 +20,9 @@ import org.json.JSONObject
 import java.util.Locale
 
 enum class AppLanguage(val code: String, val labelEn: String, val labelDe: String) {
-    AUTO("auto", "System Default (Auto EN/DE)", "Systemstandard (Auto DE/EN)"),
-    ENGLISH("en", "English", "Englisch (English)"),
-    GERMAN("de", "German (Deutsch)", "Deutsch");
+    AUTO("auto", "Auto", "Auto"),
+    ENGLISH("en", "English", "English"),
+    GERMAN("de", "Deutsch", "Deutsch");
 
     fun resolveLanguageCode(): String {
         return when (this) {
@@ -223,10 +223,10 @@ data class LunaSettings(
     val bubbleEdge: BubbleEdge = BubbleEdge.RIGHT,
     val bubbleVerticalFraction: Float = 0.28f, // 28% from top right next to physical power/side button
     val bubbleOffsetXDp: Int = 0,
-    val bubbleWidthDp: Int = 46,
-    val bubbleHeightDp: Int = 132,
-    val bubbleExpandedWidthDp: Int = 340,
-    val bubbleExpandedHeightDp: Int = 220,
+    val bubbleWidthDp: Int = 36,
+    val bubbleHeightDp: Int = 96,
+    val bubbleExpandedWidthDp: Int = 220,
+    val bubbleExpandedHeightDp: Int = 56,
     val bubbleScale: Float = 1.0f,
     val bubbleGlowIntensity: Float = 0.92f,
     val bubbleKeepAliveDock: Boolean = false,
@@ -341,10 +341,10 @@ object LunaSettingsRepository {
             bubbleEdge = BubbleEdge.fromId(p.getString("bubble_edge", BubbleEdge.RIGHT.id)),
             bubbleVerticalFraction = p.getFloat("bubble_vertical_fraction", 0.28f).coerceIn(0.05f, 0.90f),
             bubbleOffsetXDp = p.getInt("bubble_offset_x_dp", 0),
-            bubbleWidthDp = p.getInt("bubble_width_dp", 46).coerceIn(28, 160),
-            bubbleHeightDp = p.getInt("bubble_height_dp", 132).coerceIn(64, 320),
-            bubbleExpandedWidthDp = p.getInt("bubble_expanded_width_dp", 340).coerceIn(240, 420),
-            bubbleExpandedHeightDp = p.getInt("bubble_expanded_height_dp", 220).coerceIn(140, 440),
+            bubbleWidthDp = p.getInt("bubble_width_dp", 36).coerceIn(28, 72),
+            bubbleHeightDp = p.getInt("bubble_height_dp", 96).coerceIn(64, 160),
+            bubbleExpandedWidthDp = p.getInt("bubble_expanded_width_dp", 220).coerceIn(140, 300),
+            bubbleExpandedHeightDp = p.getInt("bubble_expanded_height_dp", 56).coerceIn(44, 84),
             bubbleScale = p.getFloat("bubble_scale", 1.0f).coerceIn(0.6f, 1.8f),
             bubbleGlowIntensity = p.getFloat("bubble_glow_intensity", 0.92f).coerceIn(0.2f, 1.0f),
             bubbleKeepAliveDock = p.getBoolean("bubble_keep_alive_dock", false),

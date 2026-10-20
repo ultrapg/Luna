@@ -112,7 +112,8 @@ object LunaOverlayWindowManager {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             windowType,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -196,15 +197,9 @@ object LunaOverlayWindowManager {
         }
         lp.y = (screenHeight * settings.bubbleVerticalFraction).toInt()
 
-        // Allow soft keyboard input when expanded so the quick text field inside the pill works
-        lp.flags = if (liveState.isExpanded) {
+        lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-        } else {
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-        }
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
         runCatching { wm.updateViewLayout(view, lp) }
     }

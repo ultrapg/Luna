@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -14,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ultrapg.luna.core.models.*
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
@@ -85,12 +87,11 @@ fun ModelsScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Active Download Progress Card if running
+        // Active Download Banner
         if (dlState.isRunning || dlState.errorMessage != null) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -104,16 +105,19 @@ fun ModelsScreen() {
                     ) {
                         Text(
                             text = if (dlState.isRunning) {
-                                "Downloading ${dlState.activeModel?.id?.uppercase() ?: ""} (${dlState.formattedOverallBytes})"
+                                "${dlState.activeModel?.id?.uppercase() ?: ""} • ${dlState.formattedOverallBytes}"
                             } else {
-                                dlState.errorMessage ?: "Download Paused"
+                                dlState.errorMessage ?: "Paused"
                             },
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         if (dlState.isRunning) {
-                            OutlinedButton(onClick = { ModelDownloadManager.pauseDownloads() }) {
-                                Text(if (isGerman) "Pause" else "Pause")
+                            TextButton(onClick = { ModelDownloadManager.pauseDownloads() }) {
+                                Text("Pause")
                             }
                         }
                     }
@@ -131,40 +135,20 @@ fun ModelsScreen() {
             }
         }
 
-        // Section 1: Desert Ant Labs Local Speech-to-Text (EAR + VOZ)
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 1. Speech Input (Desert Ant EAR + VOZ)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.GraphicEq,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "Desert Ant Labs Lokale Spracherkennung (EAR + VOZ)"
-                        } else {
-                            "Desert Ant Labs On-Device Speech Input (EAR + VOZ)"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
                 Text(
-                    text = if (isGerman) {
-                        "Vollständig lokale Spracherkennung auf dem Smartphone (EAR für automatische Deutsch/Englisch-Erkennung + VOZ für Transkription)."
-                    } else {
-                        "100% local on-device voice transcription using Desert Ant Labs EAR (spoken language detection for English & German) and VOZ (multilingual speech-to-text)."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = if (isGerman) "Spracheingabe (Lokal)" else "Speech Input (On-Device)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
 
                 val sttModels = remember { listOf(LocalModelId.VOZ, LocalModelId.EAR) }
@@ -193,15 +177,15 @@ fun ModelsScreen() {
                     }
                 }
 
-                // Toggle for EAR
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isGerman) "EAR Automatische Spracherkennung (DE/EN)" else "EAR Automatic Language Detection (EN/DE)",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = if (isGerman) "Automatische Spracherkennung (EAR)" else "Auto Language Detection (EAR)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
                     )
                     Switch(
                         checked = settings.earEnabled,
@@ -213,71 +197,63 @@ fun ModelsScreen() {
             }
         }
 
-        // Section 2: Fast Local Female TTS Models (English & German)
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 2. Female Neural TTS Voices (EN & DE)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.RecordVoiceOver,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = if (isGerman) {
-                                "Lokale Weibliche TTS-Stimmen (DE & EN)"
-                            } else {
-                                "Fast Local Female Neural TTS Voices (EN & DE)"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Text(
+                        text = if (isGerman) "Weibliche Stimme (TTS)" else "Female Voice (TTS)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
 
                     FilledTonalButton(
                         onClick = {
                             val sample = if (isGerman) {
-                                "Hallo! Ich bin Luna, deine persönliche Assistentin."
+                                "Hallo! Ich bin Luna."
                             } else {
-                                "Hi there! I am Luna, your personal on-device voice assistant."
+                                "Hi! I am Luna."
                             }
                             LunaTtsEngine.getInstance(context).speak(
                                 text = sample,
                                 languageCode = if (isGerman) "de" else "en"
                             )
-                        }
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(50)
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(if (isGerman) "Testen" else "Test Voice")
+                        Text(if (isGerman) "Test" else "Test", maxLines = 1)
                     }
                 }
 
-                // Speed Slider
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = if (isGerman) "Sprechgeschwindigkeit" else "Voice Speed",
+                            text = if (isGerman) "Geschwindigkeit" else "Voice Speed",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
                             text = String.format(Locale.US, "%.2fx", settings.ttsSpeed),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                     Slider(
@@ -285,7 +261,7 @@ fun ModelsScreen() {
                         onValueChange = { v ->
                             LunaSettingsRepository.update(context) { it.copy(ttsSpeed = v) }
                         },
-                        valueRange = 0.70f..1.45f
+                        valueRange = 0.75f..1.40f
                     )
                 }
 
@@ -338,40 +314,20 @@ fun ModelsScreen() {
             }
         }
 
-        // Section 3: Custom Trained Female Voice Model Slot (.onnx + tokens.txt)
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 3. Custom Trained Voice Model (.onnx)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "Eigenes Trainiertes TTS-Stimmmodell (.onnx)"
-                        } else {
-                            "Custom Trained Voice Model Replacement (.onnx)"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
                 Text(
-                    text = if (isGerman) {
-                        "Wenn du später dein eigenes weibliches VITS/Piper/Kokoro ONNX-Stimmmodell trainierst, kannst du es hier direkt importieren und aktivieren."
-                    } else {
-                        "Drop in your own custom-trained VITS / Piper / Kokoro `.onnx` model and `tokens.txt` to replace the built-in voice at any time."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = if (isGerman) "Eigenes ONNX-Stimmmodell" else "Custom ONNX Voice Model",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
 
                 OutlinedTextField(
@@ -380,9 +336,9 @@ fun ModelsScreen() {
                         customOnnxPath = newPath
                         LunaSettingsRepository.update(context) { s -> s.copy(customTtsModelPath = newPath) }
                     },
-                    label = { Text(if (isGerman) "Pfad zur .onnx Modelldatei" else "Custom .onnx Model File Path") },
-                    placeholder = { Text("/sdcard/Download/my_luna_voice.onnx") },
+                    label = { Text(".onnx Model", maxLines = 1) },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     trailingIcon = {
                         IconButton(onClick = { onnxPicker.launch(arrayOf("*/*")) }) {
                             Icon(Icons.Default.FolderOpen, contentDescription = "Pick ONNX")
@@ -397,9 +353,9 @@ fun ModelsScreen() {
                         customTokensPath = newTokens
                         LunaSettingsRepository.update(context) { s -> s.copy(customTtsTokensPath = newTokens) }
                     },
-                    label = { Text(if (isGerman) "Pfad zur tokens.txt Datei" else "Custom tokens.txt File Path") },
-                    placeholder = { Text("/sdcard/Download/tokens.txt") },
+                    label = { Text("tokens.txt", maxLines = 1) },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     trailingIcon = {
                         IconButton(onClick = { tokensPicker.launch(arrayOf("text/plain", "*/*")) }) {
                             Icon(Icons.Default.FolderOpen, contentDescription = "Pick tokens.txt")
@@ -415,19 +371,18 @@ fun ModelsScreen() {
                     ) {
                         Button(
                             onClick = {
-                                LunaSettingsRepository.update(context) {
-                                    it.copy(useCustomTtsModel = true)
-                                }
-                            }
+                                LunaSettingsRepository.update(context) { it.copy(useCustomTtsModel = true) }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(Icons.Default.Check, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
                             Text(
-                                if (settings.useCustomTtsModel) {
-                                    if (isGerman) "Eigenes Modell aktiv" else "Custom Voice Active"
+                                text = if (settings.useCustomTtsModel) {
+                                    if (isGerman) "Aktiv" else "Active"
                                 } else {
-                                    if (isGerman) "Eigenes Modell aktivieren" else "Use Custom Voice"
-                                }
+                                    if (isGerman) "Aktivieren" else "Activate"
+                                },
+                                maxLines = 1
                             )
                         }
 
@@ -442,9 +397,10 @@ fun ModelsScreen() {
                                         useCustomTtsModel = false
                                     )
                                 }
-                            }
+                            },
+                            shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text(if (isGerman) "Zurücksetzen" else "Clear")
+                            Text(if (isGerman) "Löschen" else "Clear", maxLines = 1)
                         }
                     }
                 }
@@ -468,50 +424,57 @@ private fun ModelItemRow(
         color = if (isSelected) {
             MaterialTheme.colorScheme.secondaryContainer
         } else {
-            MaterialTheme.colorScheme.surfaceVariant
+            MaterialTheme.colorScheme.surface
         },
-        shape = MaterialTheme.shapes.medium,
+        shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
                 Text(
                     text = if (isGerman) model.displayNameDe else model.displayNameEn,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = if (isGerman) model.roleDe else model.roleEn,
+                    text = "${model.sizeMb} MB • ${if (isGerman) model.roleDe else model.roleEn}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "${model.sizeMb} MB",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
             if (isInstalled) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     if (onSelect != null) {
-                        FilledTonalButton(onClick = onSelect) {
+                        FilledTonalButton(
+                            onClick = onSelect,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(50)
+                        ) {
                             Text(
-                                if (isSelected) {
+                                text = if (isSelected) {
                                     if (isGerman) "Aktiv" else "Active"
                                 } else {
-                                    if (isGerman) "Wählen" else "Select"
-                                }
+                                    if (isGerman) "Wählen" else "Use"
+                                },
+                                maxLines = 1
                             )
                         }
                     }
-                    IconButton(onClick = onDelete) {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                         Icon(
                             imageVector = Icons.Default.DeleteOutline,
                             contentDescription = "Delete",
@@ -523,12 +486,16 @@ private fun ModelItemRow(
                 queueStatus == ModelQueueStatus.EXTRACTING ||
                 queueStatus == ModelQueueStatus.QUEUED
             ) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
+                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
             } else {
-                Button(onClick = onDownload) {
-                    Icon(Icons.Default.Download, contentDescription = null)
+                FilledTonalButton(
+                    onClick = onDownload,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(if (isGerman) "Laden" else "Download")
+                    Text(if (isGerman) "Laden" else "Get", maxLines = 1)
                 }
             }
         }

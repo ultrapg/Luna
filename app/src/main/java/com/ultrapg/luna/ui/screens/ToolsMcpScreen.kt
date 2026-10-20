@@ -2,6 +2,7 @@ package com.ultrapg.luna.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -11,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ultrapg.luna.core.database.LunaDatabase
 import com.ultrapg.luna.core.database.MemoryEntity
@@ -28,14 +30,11 @@ fun ToolsMcpScreen() {
     val db = remember { LunaDatabase.getInstance(context) }
     val memories by db.memoryDao().observeAllMemories().collectAsState(initial = emptyList())
     val scrollState = rememberScrollState()
-
     val isGerman = settings.appLanguage.isGerman
 
-    // New Memory State
     var newMemoryKey by remember { mutableStateOf("") }
     var newMemoryValue by remember { mutableStateOf("") }
 
-    // New MCP Server State
     var mcpName by remember { mutableStateOf("") }
     var mcpUrl by remember { mutableStateOf("") }
     var mcpApiKey by remember { mutableStateOf("") }
@@ -48,39 +47,25 @@ fun ToolsMcpScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Section 1: Built-in Agent Capabilities (Android System Control + Web Grounding)
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 1. Clean Capabilities Switches
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Construction,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "Agent-Werkzeuge, Web-Grounding & Android-Steuerung"
-                        } else {
-                            "Agent Capabilities, Web Grounding & Android Actions"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                Text(
+                    text = if (isGerman) "Assistenten-Funktionen" else "Assistant Capabilities",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
 
                 ToggleToolRow(
-                    title = if (isGerman) "Android-Gerätesteuerung" else "Android Hardware & System Actions",
-                    subtitle = if (isGerman) {
-                        "Taschenlampe ein/aus, Apps starten, Lautstärke, Wecker/Timer, Akku-Status, Mediensteuerung, Zwischenablage"
-                    } else {
-                        "Flashlight on/off, launch apps, volume control, alarms/timers, battery/RAM status, media playback, clipboard"
-                    },
+                    title = if (isGerman) "Android-Gerätesteuerung" else "Android Device Control",
+                    subtitle = if (isGerman) "Taschenlampe, Apps, Lautstärke, Wecker, Akku" else "Flashlight, apps, volume, alarms, battery",
                     checked = settings.androidActionsEnabled,
                     onCheckedChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(androidActionsEnabled = v) }
@@ -88,12 +73,8 @@ fun ToolsMcpScreen() {
                 )
 
                 ToggleToolRow(
-                    title = if (isGerman) "DuckDuckGo Web-Suche (Grounding)" else "DuckDuckGo Web Search Grounding",
-                    subtitle = if (isGerman) {
-                        "Ermöglicht Luna Live-Recherchen im Internet wie ein autonomer Agent"
-                    } else {
-                        "Allows Luna to search DuckDuckGo for real-time facts, news, and grounding"
-                    },
+                    title = if (isGerman) "DuckDuckGo Web-Suche" else "DuckDuckGo Web Search",
+                    subtitle = if (isGerman) "Live-Internetsuche für aktuelle Fragen" else "Live web grounding for real-time answers",
                     checked = settings.webSearchEnabled,
                     onCheckedChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(webSearchEnabled = v) }
@@ -101,12 +82,8 @@ fun ToolsMcpScreen() {
                 )
 
                 ToggleToolRow(
-                    title = if (isGerman) "Webseiten-Leser (Full Page Reader)" else "Website Reader & Extractor",
-                    subtitle = if (isGerman) {
-                        "Liest und fasst beliebige Webseiten und Dokumentation direkt zusammen"
-                    } else {
-                        "Fetches and parses full web pages so Luna can read articles and docs"
-                    },
+                    title = if (isGerman) "Webseiten-Leser" else "Website Reader",
+                    subtitle = if (isGerman) "Liest und fasst Webseiten zusammen" else "Reads and summarizes full web pages",
                     checked = settings.webReaderEnabled,
                     onCheckedChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(webReaderEnabled = v) }
@@ -114,12 +91,8 @@ fun ToolsMcpScreen() {
                 )
 
                 ToggleToolRow(
-                    title = if (isGerman) "Langzeit-Gedächtnis (Memory)" else "Persistent Assistant Memory",
-                    subtitle = if (isGerman) {
-                        "Luna merkt sich wichtige Fakten, Vorlieben und Notizen über Sitzungen hinweg"
-                    } else {
-                        "Luna remembers personal preferences, facts, and notes across conversations"
-                    },
+                    title = if (isGerman) "Erinnerungen (Memory)" else "Assistant Memory",
+                    subtitle = if (isGerman) "Merkt sich Fakten & Vorlieben" else "Remembers facts and preferences",
                     checked = settings.memoryEnabled,
                     onCheckedChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(memoryEnabled = v) }
@@ -128,132 +101,109 @@ fun ToolsMcpScreen() {
             }
         }
 
-        // Section 2: Persistent Memory Manager
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 2. Clean Memory Manager (Full-width fields so labels never wrap vertically!)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Bookmarks,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = if (isGerman) {
-                                "Gespeicherte Erinnerungen (${memories.size})"
-                            } else {
-                                "Saved Memories (${memories.size})"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Text(
+                        text = if (isGerman) "Erinnerungen (${memories.size})" else "Memories (${memories.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
                     if (memories.isNotEmpty()) {
                         TextButton(
-                            onClick = {
-                                scope.launch { db.memoryDao().clearAllMemories() }
-                            }
+                            onClick = { scope.launch { db.memoryDao().clearAllMemories() } }
                         ) {
                             Text(if (isGerman) "Alle löschen" else "Clear All")
                         }
                     }
                 }
 
-                // Add Memory Form
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = newMemoryKey,
-                        onValueChange = { newMemoryKey = it },
-                        label = { Text(if (isGerman) "Thema/Schlüssel" else "Topic/Key") },
-                        singleLine = true,
-                        modifier = Modifier.weight(0.4f)
-                    )
-                    OutlinedTextField(
-                        value = newMemoryValue,
-                        onValueChange = { newMemoryValue = it },
-                        label = { Text(if (isGerman) "Inhalt/Notiz" else "Fact/Preference") },
-                        singleLine = true,
-                        modifier = Modifier.weight(0.6f)
-                    )
-                    FilledIconButton(
-                        onClick = {
-                            if (newMemoryKey.isNotBlank() && newMemoryValue.isNotBlank()) {
-                                val k = newMemoryKey.trim()
-                                val v = newMemoryValue.trim()
-                                newMemoryKey = ""
-                                newMemoryValue = ""
-                                scope.launch {
-                                    db.memoryDao().insertMemory(MemoryEntity(key = k, value = v))
-                                }
+                OutlinedTextField(
+                    value = newMemoryKey,
+                    onValueChange = { newMemoryKey = it },
+                    label = { Text(if (isGerman) "Thema" else "Topic", maxLines = 1) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = newMemoryValue,
+                    onValueChange = { newMemoryValue = it },
+                    label = { Text(if (isGerman) "Notiz / Vorliebe" else "Fact / Preference", maxLines = 1) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                FilledTonalButton(
+                    onClick = {
+                        if (newMemoryKey.isNotBlank() && newMemoryValue.isNotBlank()) {
+                            val k = newMemoryKey.trim()
+                            val v = newMemoryValue.trim()
+                            newMemoryKey = ""
+                            newMemoryValue = ""
+                            scope.launch {
+                                db.memoryDao().insertMemory(MemoryEntity(key = k, value = v))
                             }
                         }
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Memory")
-                    }
+                    },
+                    enabled = newMemoryKey.isNotBlank() && newMemoryValue.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (isGerman) "Erinnerung speichern" else "Save Memory", maxLines = 1)
                 }
 
-                if (memories.isEmpty()) {
-                    Text(
-                        text = if (isGerman) {
-                            "Noch keine Erinnerungen gespeichert. Sage z.B. \"Merke dir, dass ich gerne Espresso trinke\"."
-                        } else {
-                            "No memories saved yet. Ask Luna e.g. \"Remember that my favorite drink is espresso\"."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    memories.forEach { mem ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = MaterialTheme.shapes.small,
-                            modifier = Modifier.fillMaxWidth()
+                memories.forEach { mem ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = mem.key,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = mem.value,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            IconButton(
+                                onClick = { scope.launch { db.memoryDao().deleteMemoryById(mem.id) } },
+                                modifier = Modifier.size(32.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = mem.key,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        text = mem.value,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        scope.launch { db.memoryDao().deleteMemoryById(mem.id) }
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.DeleteOutline,
-                                        contentDescription = "Delete Memory",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.DeleteOutline,
+                                    contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
                             }
                         }
                     }
@@ -261,70 +211,52 @@ fun ToolsMcpScreen() {
             }
         }
 
-        // Section 3: MCP (Model Context Protocol) Servers
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 3. Clean MCP Servers Section
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Hub,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "MCP-Server (Model Context Protocol)"
-                        } else {
-                            "MCP Servers (Model Context Protocol)"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
                 Text(
-                    text = if (isGerman) {
-                        "Verbinde externe MCP-Server (JSON-RPC über HTTP/SSE), um Luna mit zusätzlichen Quick-Ask- und Smart-Home-/Entwickler-Tools zu erweitern."
-                    } else {
-                        "Connect external MCP servers (JSON-RPC over HTTP/SSE) so Luna can discover and invoke remote tools automatically."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "MCP Servers",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
 
                 OutlinedTextField(
                     value = mcpName,
                     onValueChange = { mcpName = it },
-                    label = { Text(if (isGerman) "Servername" else "Server Name") },
-                    placeholder = { Text("HomeAssistant / Brave / GitHub MCP") },
+                    label = { Text("Name", maxLines = 1) },
+                    placeholder = { Text("HomeAssistant / GitHub") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 OutlinedTextField(
                     value = mcpUrl,
                     onValueChange = { mcpUrl = it },
-                    label = { Text("MCP HTTP/JSON-RPC Endpoint URL") },
-                    placeholder = { Text("https://my-mcp.example.com/mcp") },
+                    label = { Text("Endpoint URL", maxLines = 1) },
+                    placeholder = { Text("https://example.com/mcp") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 OutlinedTextField(
                     value = mcpApiKey,
                     onValueChange = { mcpApiKey = it },
-                    label = { Text(if (isGerman) "API Key / Bearer Token (Optional)" else "API Key / Bearer Token (Optional)") },
-                    placeholder = { Text("eyJ...") },
+                    label = { Text(if (isGerman) "Token (Optional)" else "Token (Optional)", maxLines = 1) },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Button(
+                FilledTonalButton(
                     onClick = {
                         if (mcpName.isNotBlank() && mcpUrl.isNotBlank()) {
                             val newServer = McpServerConfig(
@@ -342,11 +274,13 @@ fun ToolsMcpScreen() {
                             mcpApiKey = ""
                         }
                     },
-                    enabled = mcpName.isNotBlank() && mcpUrl.isNotBlank()
+                    enabled = mcpName.isNotBlank() && mcpUrl.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(Icons.Default.AddLink, contentDescription = null)
+                    Icon(Icons.Default.AddLink, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text(if (isGerman) "MCP-Server hinzufügen" else "Add MCP Server")
+                    Text(if (isGerman) "Server hinzufügen" else "Add MCP Server", maxLines = 1)
                 }
 
                 if (mcpTestStatus != null) {
@@ -359,27 +293,31 @@ fun ToolsMcpScreen() {
 
                 settings.mcpServers.forEach { server ->
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                 Text(
                                     text = server.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = server.url,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
 
@@ -387,21 +325,13 @@ fun ToolsMcpScreen() {
                                 IconButton(
                                     onClick = {
                                         scope.launch {
-                                            mcpTestStatus = if (isGerman) {
-                                                "Prüfe ${server.name}..."
-                                            } else {
-                                                "Testing ${server.name}..."
-                                            }
+                                            mcpTestStatus = "..."
                                             val tools = LunaMcpClient.discoverAllTools(listOf(server))
-                                            mcpTestStatus = if (isGerman) {
-                                                "${server.name}: ${tools.size} MCP-Tools gefunden"
-                                            } else {
-                                                "${server.name}: Discovered ${tools.size} MCP tools"
-                                            }
+                                            mcpTestStatus = "${server.name}: ${tools.size} tools"
                                         }
                                     }
                                 ) {
-                                    Icon(Icons.Default.Science, contentDescription = "Test MCP")
+                                    Icon(Icons.Default.Science, contentDescription = "Test")
                                 }
 
                                 Switch(
@@ -426,7 +356,7 @@ fun ToolsMcpScreen() {
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.DeleteOutline,
-                                        contentDescription = "Remove MCP",
+                                        contentDescription = "Remove",
                                         tint = MaterialTheme.colorScheme.error
                                     )
                                 }
@@ -460,7 +390,9 @@ private fun ToggleToolRow(
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)

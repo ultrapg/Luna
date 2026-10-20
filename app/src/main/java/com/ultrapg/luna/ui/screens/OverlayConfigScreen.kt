@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ultrapg.luna.assistant.AssistantLiveState
 import com.ultrapg.luna.assistant.AssistantOverlayPhase
@@ -30,6 +31,7 @@ import com.ultrapg.luna.overlay.LunaOverlayService
 import com.ultrapg.luna.overlay.LunaOverlayWindowManager
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OverlayConfigScreen(
     onRequestAssistantRole: () -> Unit
@@ -37,16 +39,13 @@ fun OverlayConfigScreen(
     val context = LocalContext.current
     val settings by LunaSettingsRepository.settingsFlow.collectAsState()
     val scrollState = rememberScrollState()
-
     val isGerman = settings.appLanguage.isGerman
 
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    var isDefaultAssistant by remember { mutableStateOf(AssistantRoleHelper.isDefaultAssistant(context)) }
     var previewExpanded by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         canDrawOverlays = Settings.canDrawOverlays(context)
-        isDefaultAssistant = AssistantRoleHelper.isDefaultAssistant(context)
     }
 
     Column(
@@ -56,109 +55,12 @@ fun OverlayConfigScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Section 1: Side-Button Digital Assistant Setup
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            ),
+        // 1. Clean Pill Preview Box
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PowerSettingsNew,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        text = if (isGerman) {
-                            "Power-/Seitentaste & Standard-Assistent"
-                        } else {
-                            "Side-Button Trigger & Default Assistant"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Text(
-                    text = if (isGerman) {
-                        "Setze Luna als Standard-Digitalassistent, damit ein langer Druck auf die Seitentaste (wie bei Gemini) die schwebende Luna-Bubble direkt neben der physischen Taste öffnet."
-                    } else {
-                        "Set Luna as your default Digital Assistant so holding the physical side/power button (just like Gemini) spawns the Luna pill bubble right next to the button."
-                    },
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = onRequestAssistantRole,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Assistant, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (isDefaultAssistant) {
-                                if (isGerman) "Assistent-Einstellungen" else "Assistant Settings"
-                            } else {
-                                if (isGerman) "Als Standard setzen" else "Set Default Assistant"
-                            }
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = {
-                            if (!Settings.canDrawOverlays(context)) {
-                                AssistantRoleHelper.openOverlayPermissionSettings(context)
-                            } else {
-                                canDrawOverlays = true
-                                LunaOverlayService.startOrTrigger(context, startListening = true)
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.Layers, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (canDrawOverlays) {
-                                if (isGerman) "Bubble testen" else "Test Pill Now"
-                            } else {
-                                if (isGerman) "Overlay erlauben" else "Grant Overlay"
-                            }
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            AssistantRoleHelper.openAccessibilitySettings(context)
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.AccessibilityNew, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (isGerman) "Bedienungshilfe (Optionaler Trigger)" else "Accessibility Shortcut"
-                        )
-                    }
-                }
-            }
-        }
-
-        // Section 2: Interactive Screen Edge Preview & Drag-to-Position Canvas
-        Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -169,47 +71,36 @@ fun OverlayConfigScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isGerman) {
-                            "Interaktive Bubble-Position & Vorschau"
-                        } else {
-                            "Interactive Pill Position & Live Preview"
-                        },
+                        text = if (isGerman) "Pill-Vorschau" else "Pill Preview",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.SemiBold
                     )
-                    FilterChip(
-                        selected = previewExpanded,
-                        onClick = { previewExpanded = !previewExpanded },
-                        label = {
-                            Text(
-                                if (previewExpanded) {
-                                    if (isGerman) "Aktiv (Welle)" else "Active Wave"
-                                } else {
-                                    if (isGerman) "Notch-Pill" else "Collapsed Notch"
-                                }
-                            )
+
+                    SingleChoiceSegmentedButtonRow {
+                        SegmentedButton(
+                            selected = previewExpanded,
+                            onClick = { previewExpanded = true },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                        ) {
+                            Text(if (isGerman) "Aktiv" else "Active", maxLines = 1)
                         }
-                    )
+                        SegmentedButton(
+                            selected = !previewExpanded,
+                            onClick = { previewExpanded = false },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                        ) {
+                            Text(if (isGerman) "Notch" else "Notch", maxLines = 1)
+                        }
+                    }
                 }
 
-                Text(
-                    text = if (isGerman) {
-                        "Ziehe die Kerbe im Vorschau-Bildschirm auf die Höhe deiner physischen Seitentaste oder nutze die Regler unten."
-                    } else {
-                        "Drag the notch inside the phone preview to align it with your physical side button, or fine-tune with the sliders below."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                // Phone Frame Simulation + Live Gemini Pill Preview
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(250.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(Color(0xFF0A0D14))
-                        .border(2.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
+                        .height(150.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF090B10))
+                        .border(1.dp, Color(0xFF222634), RoundedCornerShape(18.dp))
                         .pointerInput(Unit) {
                             detectDragGestures { change, dragAmount ->
                                 change.consume()
@@ -220,99 +111,147 @@ fun OverlayConfigScreen(
                                 }
                                 LunaOverlayWindowManager.syncWindowPosition(context)
                             }
-                        }
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
-                    val previewState = remember(previewExpanded, isGerman) {
+                    val previewState = remember(previewExpanded) {
                         AssistantLiveState(
                             isVisible = true,
                             isExpanded = previewExpanded,
-                            phase = if (previewExpanded) AssistantOverlayPhase.LISTENING else AssistantOverlayPhase.IDLE_NOTCH,
-                            userTranscript = if (isGerman) "Schalte die Taschenlampe ein..." else "Turn on the flashlight...",
-                            statusBadge = if (isGerman) "Höre zu..." else "Listening..."
+                            phase = if (previewExpanded) AssistantOverlayPhase.LISTENING else AssistantOverlayPhase.IDLE_NOTCH
                         )
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .align(
-                                if (settings.bubbleEdge == BubbleEdge.LEFT) {
-                                    Alignment.TopStart
-                                } else {
-                                    Alignment.TopEnd
-                                }
-                            )
-                            .offset(y = (settings.bubbleVerticalFraction * 120f).dp)
-                            .padding(horizontal = 4.dp)
-                    ) {
-                        GeminiSidePillOverlay(
-                            liveState = previewState,
-                            settings = settings,
-                            micRms = 0.56f,
-                            waveBands = floatArrayOf(0.45f, 0.78f, 0.92f, 0.64f, 0.50f),
-                            ttsRms = 0f,
-                            isSpeaking = false,
-                            onDragDelta = { _, dy ->
-                                val delta = dy / 500f
-                                LunaSettingsRepository.update(context) {
-                                    it.copy(
-                                        bubbleVerticalFraction = (it.bubbleVerticalFraction + delta)
-                                            .coerceIn(0.05f, 0.90f)
-                                    )
-                                }
-                                LunaOverlayWindowManager.syncWindowPosition(context)
-                            },
-                            onToggleExpand = { previewExpanded = !previewExpanded },
-                            onDismiss = { previewExpanded = false }
-                        )
-                    }
+                    GeminiSidePillOverlay(
+                        liveState = previewState,
+                        settings = settings,
+                        micRms = 0.52f,
+                        waveBands = floatArrayOf(0.35f, 0.65f, 0.88f, 0.60f, 0.40f),
+                        ttsRms = 0f,
+                        isSpeaking = false,
+                        onDragDelta = { _, _ -> },
+                        onToggleExpand = { previewExpanded = !previewExpanded },
+                        onDismiss = { previewExpanded = false }
+                    )
                 }
             }
         }
 
-        // Section 3: Resize & Dock Controls
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // 2. Clean Full-Width Setup Actions (No wrapping buttons!)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = if (isGerman) "Seitentaste & Berechtigungen" else "Side Button & Permissions",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Button(
+                    onClick = onRequestAssistantRole,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Assistant, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isGerman) "Als Standard-Assistent festlegen" else "Set as Default Assistant",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                FilledTonalButton(
+                    onClick = {
+                        if (!Settings.canDrawOverlays(context)) {
+                            AssistantRoleHelper.openOverlayPermissionSettings(context)
+                        } else {
+                            canDrawOverlays = true
+                            LunaOverlayService.startOrTrigger(context, startListening = true)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.SmartButton, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (canDrawOverlays) {
+                            if (isGerman) "Pill jetzt auf Bildschirm starten" else "Launch Pill Now"
+                        } else {
+                            if (isGerman) "Overlay-Berechtigung erteilen" else "Grant Overlay Permission"
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { AssistantRoleHelper.openAccessibilitySettings(context) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.AccessibilityNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isGerman) "Bedienungshilfe (Optional)" else "Accessibility Shortcut (Optional)",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        // 3. Position & Size Controls
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = if (isGerman) "Größe, Ausrichtung & Gemini-Glow" else "Size, Edge Docking & Gemini Glow",
+                    text = if (isGerman) "Position & Größe" else "Position & Size",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                 )
 
-                // Dock Mode Selector
-                Text(
-                    text = if (isGerman) "Bildschirmrand-Modus" else "Screen Edge Docking Mode",
-                    style = MaterialTheme.typography.labelLarge
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    BubbleEdge.entries.forEach { edge ->
-                        FilterChip(
+                // Edge Segmented Row (Guaranteed 1 line)
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    BubbleEdge.entries.forEachIndexed { idx, edge ->
+                        SegmentedButton(
                             selected = settings.bubbleEdge == edge,
                             onClick = {
                                 LunaSettingsRepository.update(context) { it.copy(bubbleEdge = edge) }
                                 LunaOverlayWindowManager.syncWindowPosition(context)
                             },
-                            label = {
-                                Text(
-                                    when (edge) {
-                                        BubbleEdge.RIGHT -> if (isGerman) "Rechts (Taste)" else "Right Notch"
-                                        BubbleEdge.LEFT -> if (isGerman) "Links (Notch)" else "Left Notch"
-                                        BubbleEdge.FREE -> if (isGerman) "Frei" else "Free Floating"
-                                    }
-                                )
-                            }
-                        )
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = idx,
+                                count = BubbleEdge.entries.size
+                            )
+                        ) {
+                            Text(
+                                text = when (edge) {
+                                    BubbleEdge.RIGHT -> if (isGerman) "Rechts" else "Right"
+                                    BubbleEdge.LEFT -> if (isGerman) "Links" else "Left"
+                                    BubbleEdge.FREE -> if (isGerman) "Frei" else "Free"
+                                },
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
-                // Vertical Position Next to Side Button
                 SliderSettingRow(
-                    label = if (isGerman) "Vertikale Position (Höhe der Seitentaste)" else "Vertical Position (Side Button Height)",
+                    label = if (isGerman) "Vertikale Position" else "Vertical Position",
                     valueText = "${(settings.bubbleVerticalFraction * 100).roundToInt()}%",
                     value = settings.bubbleVerticalFraction,
                     valueRange = 0.05f..0.90f,
@@ -322,47 +261,33 @@ fun OverlayConfigScreen(
                     }
                 )
 
-                // Collapsed Notch Pill Width
                 SliderSettingRow(
-                    label = if (isGerman) "Notch-Breite (Eingeklappt)" else "Collapsed Notch Width",
-                    valueText = "${settings.bubbleWidthDp} dp",
-                    value = settings.bubbleWidthDp.toFloat(),
-                    valueRange = 28f..120f,
+                    label = if (isGerman) "Pill-Breite" else "Pill Width",
+                    valueText = "${settings.bubbleExpandedWidthDp} dp",
+                    value = settings.bubbleExpandedWidthDp.toFloat(),
+                    valueRange = 140f..300f,
                     onValueChange = { v ->
-                        LunaSettingsRepository.update(context) { it.copy(bubbleWidthDp = v.roundToInt()) }
+                        LunaSettingsRepository.update(context) { it.copy(bubbleExpandedWidthDp = v.roundToInt()) }
                     }
                 )
 
-                // Collapsed Notch Pill Height
                 SliderSettingRow(
-                    label = if (isGerman) "Notch-Höhe (Eingeklappt)" else "Collapsed Notch Height",
-                    valueText = "${settings.bubbleHeightDp} dp",
-                    value = settings.bubbleHeightDp.toFloat(),
-                    valueRange = 64f..240f,
+                    label = if (isGerman) "Pill-Höhe" else "Pill Height",
+                    valueText = "${settings.bubbleExpandedHeightDp} dp",
+                    value = settings.bubbleExpandedHeightDp.toFloat(),
+                    valueRange = 44f..84f,
                     onValueChange = { v ->
-                        LunaSettingsRepository.update(context) { it.copy(bubbleHeightDp = v.roundToInt()) }
+                        LunaSettingsRepository.update(context) { it.copy(bubbleExpandedHeightDp = v.roundToInt()) }
                     }
                 )
 
-                // Expanded Pill Scale
                 SliderSettingRow(
-                    label = if (isGerman) "Skalierung der geöffneten Sprach-Bubble" else "Expanded Voice Pill Scale",
+                    label = if (isGerman) "Skalierung" else "Scale",
                     valueText = "${(settings.bubbleScale * 100).roundToInt()}%",
                     value = settings.bubbleScale,
-                    valueRange = 0.70f..1.40f,
+                    valueRange = 0.75f..1.35f,
                     onValueChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(bubbleScale = v) }
-                    }
-                )
-
-                // Gemini Outline & Audio Wave Glow Intensity
-                SliderSettingRow(
-                    label = if (isGerman) "Gemini-Umriss & Wellen-Leuchtstärke" else "Gemini Outline & Wave Glow Intensity",
-                    valueText = "${(settings.bubbleGlowIntensity * 100).roundToInt()}%",
-                    value = settings.bubbleGlowIntensity,
-                    valueRange = 0.25f..1.0f,
-                    onValueChange = { v ->
-                        LunaSettingsRepository.update(context) { it.copy(bubbleGlowIntensity = v) }
                     }
                 )
 
@@ -371,22 +296,11 @@ fun OverlayConfigScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (isGerman) "Notch dauerhaft am Rand anzeigen" else "Keep Persistent Notch Docked on Edge",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = if (isGerman) {
-                                "Hält die kleine Kerbe dauerhaft neben der Seitentaste griffbereit."
-                            } else {
-                                "Keeps the small pill notch docked on the screen edge at all times."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = if (isGerman) "Notch dauerhaft am Rand anzeigen" else "Keep Notch Docked on Edge",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = settings.bubbleKeepAliveDock,
                         onCheckedChange = { checked ->
@@ -395,25 +309,24 @@ fun OverlayConfigScreen(
                     )
                 }
 
-                OutlinedButton(
+                TextButton(
                     onClick = {
                         LunaSettingsRepository.update(context) {
                             it.copy(
                                 bubbleEdge = BubbleEdge.RIGHT,
                                 bubbleVerticalFraction = 0.28f,
-                                bubbleWidthDp = 46,
-                                bubbleHeightDp = 132,
-                                bubbleScale = 1.0f,
-                                bubbleGlowIntensity = 0.92f
+                                bubbleWidthDp = 36,
+                                bubbleHeightDp = 96,
+                                bubbleExpandedWidthDp = 220,
+                                bubbleExpandedHeightDp = 56,
+                                bubbleScale = 1.0f
                             )
                         }
                         LunaOverlayWindowManager.syncWindowPosition(context)
                     },
                     modifier = Modifier.align(Alignment.End)
                 ) {
-                    Icon(Icons.Default.RestartAlt, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (isGerman) "Standardwerte wiederherstellen" else "Reset Bubble Defaults")
+                    Text(if (isGerman) "Zurücksetzen" else "Reset Defaults")
                 }
             }
         }
@@ -438,7 +351,7 @@ private fun SliderSettingRow(
                 text = valueText,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             )
         }
         Slider(

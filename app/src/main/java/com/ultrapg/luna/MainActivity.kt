@@ -14,10 +14,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.BubbleChart
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.SmartButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import com.ultrapg.luna.assistant.AssistantRoleHelper
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
@@ -46,11 +47,11 @@ enum class LunaTab(
     val labelDe: String,
     val icon: ImageVector
 ) {
-    CHATS("Chats", "Chats", Icons.AutoMirrored.Filled.Chat),
-    BUBBLE("Bubble", "Bubble", Icons.Default.BubbleChart),
-    AI_NPU("AI & NPU", "KI & NPU", Icons.Default.Psychology),
+    CHATS("Chat", "Chat", Icons.AutoMirrored.Filled.Chat),
+    BUBBLE("Pill", "Pill", Icons.Default.SmartButton),
+    AI_NPU("AI", "KI", Icons.Default.Psychology),
     VOICE_MODELS("Voice", "Stimme", Icons.Default.GraphicEq),
-    TOOLS_MCP("Tools & MCP", "Tools & MCP", Icons.Default.Extension)
+    TOOLS_MCP("Tools", "Tools", Icons.Default.Extension)
 }
 
 class MainActivity : ComponentActivity() {
@@ -98,17 +99,22 @@ class MainActivity : ComponentActivity() {
                     bottomBar = {
                         NavigationBar {
                             LunaTab.entries.forEach { tab ->
+                                val label = if (isGerman) tab.labelDe else tab.labelEn
                                 NavigationBarItem(
                                     selected = currentTab == tab,
                                     onClick = { currentTab = tab },
                                     icon = {
                                         Icon(
                                             imageVector = tab.icon,
-                                            contentDescription = if (isGerman) tab.labelDe else tab.labelEn
+                                            contentDescription = label
                                         )
                                     },
                                     label = {
-                                        Text(if (isGerman) tab.labelDe else tab.labelEn)
+                                        Text(
+                                            text = label,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                 )
                             }
