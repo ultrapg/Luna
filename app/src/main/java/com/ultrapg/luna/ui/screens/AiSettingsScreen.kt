@@ -22,6 +22,7 @@ import com.ultrapg.luna.core.llm.OpenAiAgentEngine
 import com.ultrapg.luna.core.settings.AppLanguage
 import com.ultrapg.luna.core.settings.HardwareAccelerator
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
+import com.ultrapg.luna.core.settings.ThinkingEffort
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -281,6 +282,40 @@ fun AiSettingsScreen() {
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
+                }
+
+                // Thinking / Reasoning Mode Selector (Defaults to standard OpenAI request)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = if (isGerman) {
+                            "Thinking / Reasoning (Standard = normaler API-Request)"
+                        } else {
+                            "Thinking / Reasoning (Default = standard API request)"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        ThinkingEffort.entries.forEachIndexed { idx, effort ->
+                            SegmentedButton(
+                                selected = settings.thinkingEffort == effort,
+                                onClick = {
+                                    LunaSettingsRepository.update(context) {
+                                        it.copy(thinkingEffort = effort)
+                                    }
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = idx,
+                                    count = ThinkingEffort.entries.size
+                                )
+                            ) {
+                                Text(
+                                    text = if (isGerman) effort.labelDe else effort.labelEn,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Column {

@@ -79,6 +79,9 @@ object LunaAssistantController {
     @Volatile
     private var lastExternalActivityLaunchMs: Long = 0L
 
+    @Volatile
+    private var lastTurnActiveRealtimeMs: Long = 0L
+
     /**
      * Called when an Android action tool (`open_app`, `open_system_settings`, `set_alarm_or_timer`)
      * starts an external Activity so the bubble overlay stays visible across the activity transition
@@ -150,6 +153,7 @@ object LunaAssistantController {
     fun triggerFromSideButton(context: Context, startListeningImmediately: Boolean = true) {
         val appContext = context.applicationContext
         LunaSettingsRepository.init(appContext)
+        val settings = LunaSettingsRepository.current(appContext)
         hapticPulse(appContext)
 
         dismissAnimationJob?.cancel()
@@ -161,11 +165,30 @@ object LunaAssistantController {
             return
         }
 
+        // Continuous conversation window:
+        // If triggered again within `sideButtonContinuationTimeoutSec` (default 20s) after the
+        // previous turn finished (or while still speaking/active), continue the same chat session!
+        // If more than `sideButtonContinuationTimeoutSec` has elapsed, start a fresh new chat session.
+        val nowRealtime = SystemClock.elapsedRealtime()
+        val continuationWindowMs = settings.sideButtonContinuationTimeoutSec.coerceIn(5, 180) * 1000L
+        val wasRecentlyActive = lastTurnActiveRealtimeMs > 0L &&
+            (nowRealtime - lastTurnActiveRealtimeMs) <= continuationWindowMs
+        val isCurrentlySpeakingOrThinking = current.phase == AssistantOverlayPhase.SPEAKING ||
+            current.phase == AssistantOverlayPhase.THINKING ||
+            LunaTtsEngine.getInstance(appContext).isSpeaking.value
+
+        val sessionIdToUse = if ((wasRecentlyActive || isCurrentlySpeakingOrThinking) && current.activeSessionId != null) {
+            current.activeSessionId
+        } else {
+            null
+        }
+
         LunaTtsEngine.getInstance(appContext).stopSpeaking()
         _liveState.value = current.copy(
             isVisible = true,
             isDismissing = false,
             isExpanded = true,
+            activeSessionId = sessionIdToUse,
             phase = if (startListeningImmediately) AssistantOverlayPhase.LISTENING else AssistantOverlayPhase.IDLE_NOTCH,
             userTranscript = "",
             assistantReply = "",
@@ -471,7 +494,7 @@ object LunaAssistantController {
                 sessionId = sessionId,
                 role = "assistant",
                 content = result.replyText,
-                toolCallsSummary = result.executedToolsSummary.joinToString(", ")
+                toolCallsSummary = result.encodedToolCallsSummary
             )
         )
         chatDao.updateSessionMetadata(
@@ -480,6 +503,7 @@ object LunaAssistantController {
             updatedAt = System.currentTimeMillis(),
             model = result.modelUsed
         )
+        lastTurnActiveRealtimeMs = SystemClock.elapsedRealtime()
 
         val ttsEngine = LunaTtsEngine.getInstance(appContext)
         if (settings.ttsEnabled) {
@@ -491,6 +515,8 @@ object LunaAssistantController {
             )
             // Suspend until the entire TTS synthesis & playback completes
             ttsEngine.speakAndAwait(result.replyText, detectedLanguage)
+            // Mark the end of speech as the start of the 20s continuation countdown
+            lastTurnActiveRealtimeMs = SystemClock.elapsedRealtime()
             _liveState.value = _liveState.value.copy(
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
                 statusBadge = ""
@@ -501,6 +527,7 @@ object LunaAssistantController {
                 dismissOverlay(appContext)
             }
         } else {
+            lastTurnActiveRealtimeMs = SystemClock.elapsedRealtime()
             _liveState.value = _liveState.value.copy(
                 phase = AssistantOverlayPhase.IDLE_NOTCH,
                 assistantReply = result.replyText,

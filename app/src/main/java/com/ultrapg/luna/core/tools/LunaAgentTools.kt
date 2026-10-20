@@ -511,7 +511,7 @@ object LunaAgentTools {
     }
 
     /**
-     * Searches DuckDuckGo HTML Lite endpoint + Instant Answer API for web grounding.
+     * Searches DuckDuckGo HTML Lite endpoint + Instant Answer API for fast, single-step web grounding.
      */
     fun searchDuckDuckGo(query: String, maxResults: Int = 5): String {
         if (query.isBlank()) {
@@ -528,41 +528,57 @@ object LunaAgentTools {
             .build()
 
         val resultsArr = JSONArray()
-        httpClient.newCall(request).execute().use { response ->
-            val html = response.body?.string().orEmpty()
-            // Parse result blocks from DuckDuckGo HTML endpoint
-            val linkRegex = Regex(
-                """<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>""",
-                RegexOption.IGNORE_CASE
-            )
-            val snippetRegex = Regex(
-                """<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>""",
-                RegexOption.IGNORE_CASE
-            )
+        var instantSummary = ""
 
-            val links = linkRegex.findAll(html).toList()
-            val snippets = snippetRegex.findAll(html).toList()
+        // Query DuckDuckGo Instant Answer JSON API for direct facts/definitions
+        val iaUrl = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
+        runCatching {
+            val iaReq = Request.Builder().url(iaUrl).get().build()
+            httpClient.newCall(iaReq).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                val json = JSONObject(body)
+                val abstractText = json.optString("AbstractText", "").trim()
+                val answerText = json.optString("Answer", "").trim()
+                instantSummary = listOf(answerText, abstractText).filter { it.isNotBlank() }.joinToString(" — ")
+            }
+        }
 
-            for (i in 0 until minOf(links.size, maxResults)) {
-                val rawHref = links[i].groupValues[1]
-                val resolvedUrl = extractDuckDuckGoRedirectUrl(rawHref)
-                val title = stripHtmlTags(links[i].groupValues[2])
-                val snippet = if (i < snippets.size) stripHtmlTags(snippets[i].groupValues[1]) else ""
-                if (title.isNotBlank() && resolvedUrl.isNotBlank()) {
-                    resultsArr.put(
-                        JSONObject()
-                            .put("rank", i + 1)
-                            .put("title", title)
-                            .put("url", resolvedUrl)
-                            .put("snippet", snippet)
-                    )
+        runCatching {
+            httpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string().orEmpty()
+                // Parse result blocks from DuckDuckGo HTML endpoint
+                val linkRegex = Regex(
+                    """<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>""",
+                    RegexOption.IGNORE_CASE
+                )
+                val snippetRegex = Regex(
+                    """<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>""",
+                    RegexOption.IGNORE_CASE
+                )
+
+                val links = linkRegex.findAll(html).toList()
+                val snippets = snippetRegex.findAll(html).toList()
+
+                for (i in 0 until minOf(links.size, maxResults)) {
+                    val rawHref = links[i].groupValues[1]
+                    val resolvedUrl = extractDuckDuckGoRedirectUrl(rawHref)
+                    val title = stripHtmlTags(links[i].groupValues[2])
+                    val snippet = if (i < snippets.size) stripHtmlTags(snippets[i].groupValues[1]) else ""
+                    if (title.isNotBlank() && resolvedUrl.isNotBlank()) {
+                        resultsArr.put(
+                            JSONObject()
+                                .put("rank", i + 1)
+                                .put("title", title)
+                                .put("url", resolvedUrl)
+                                .put("snippet", snippet)
+                        )
+                    }
                 }
             }
         }
 
-        // Also query DuckDuckGo Instant Answer JSON API if HTML results were sparse
+        // Fallback to Instant Answer RelatedTopics if HTML results were sparse
         if (resultsArr.length() == 0) {
-            val iaUrl = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
             runCatching {
                 val iaReq = Request.Builder().url(iaUrl).get().build()
                 httpClient.newCall(iaReq).execute().use { resp ->
@@ -603,6 +619,7 @@ object LunaAgentTools {
         return JSONObject()
             .put("ok", true)
             .put("query", query)
+            .put("instant_answer", instantSummary)
             .put("results_count", resultsArr.length())
             .put("results", resultsArr)
             .toString()

@@ -95,6 +95,20 @@ enum class HardwareAccelerator(
     }
 }
 
+enum class ThinkingEffort(val id: String, val labelEn: String, val labelDe: String) {
+    DEFAULT("default", "Default", "Standard"),
+    OFF("off", "Off", "Aus"),
+    LOW("low", "Low", "Niedrig"),
+    MEDIUM("medium", "Med", "Mittel"),
+    HIGH("high", "High", "Hoch");
+
+    companion object {
+        fun fromId(id: String?): ThinkingEffort {
+            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: DEFAULT
+        }
+    }
+}
+
 enum class BubbleEdge(val id: String, val labelEn: String, val labelDe: String) {
     RIGHT("right", "Right Edge (Default Side Button)", "Rechter Rand (Standard-Seitentaste)"),
     LEFT("left", "Left Edge", "Linker Rand"),
@@ -189,6 +203,7 @@ data class LunaSettings(
     val openAiApiKey: String = "",
     val openAiModel: String = "",
     val availableModels: List<String> = emptyList(),
+    val thinkingEffort: ThinkingEffort = ThinkingEffort.DEFAULT,
     val temperature: Float = 0.6f,
     val maxTokens: Int = 2048,
     val customSystemPrompt: String = "",
@@ -197,6 +212,7 @@ data class LunaSettings(
     val earEnabled: Boolean = true,
     val autoSilenceStop: Boolean = true,
     val silenceTimeoutMs: Long = 3000L,
+    val sideButtonContinuationTimeoutSec: Int = 20, // Continue same chat if re-triggered within 20s; start new chat after 20s
 
     // Fast Local Female TTS Settings
     val ttsEnabled: Boolean = true,
@@ -314,12 +330,14 @@ object LunaSettingsRepository {
             openAiApiKey = p.getString("openai_api_key", "") ?: "",
             openAiModel = p.getString("openai_model_v4", "") ?: "",
             availableModels = parsedModels,
+            thinkingEffort = ThinkingEffort.fromId(p.getString("thinking_effort", ThinkingEffort.DEFAULT.id)),
             temperature = p.getFloat("temperature", 0.6f),
             maxTokens = p.getInt("max_tokens", 2048),
             customSystemPrompt = p.getString("custom_system_prompt", "") ?: "",
             earEnabled = p.getBoolean("ear_enabled", true),
             autoSilenceStop = p.getBoolean("auto_silence_stop", true),
             silenceTimeoutMs = p.getLong("silence_timeout_ms", 3000L),
+            sideButtonContinuationTimeoutSec = p.getInt("side_button_continuation_timeout_sec", 20).coerceIn(5, 180),
             ttsEnabled = p.getBoolean("tts_enabled", true),
             selectedTtsVoice = TtsVoiceModelId.fromId(
                 p.getString(
@@ -380,12 +398,14 @@ object LunaSettingsRepository {
             .putString("openai_api_key", s.openAiApiKey.trim())
             .putString("openai_model_v4", s.openAiModel.trim())
             .putString("available_models_v4", modelsArr.toString())
+            .putString("thinking_effort", s.thinkingEffort.id)
             .putFloat("temperature", s.temperature)
             .putInt("max_tokens", s.maxTokens)
             .putString("custom_system_prompt", s.customSystemPrompt)
             .putBoolean("ear_enabled", s.earEnabled)
             .putBoolean("auto_silence_stop", s.autoSilenceStop)
             .putLong("silence_timeout_ms", s.silenceTimeoutMs)
+            .putInt("side_button_continuation_timeout_sec", s.sideButtonContinuationTimeoutSec.coerceIn(5, 180))
             .putBoolean("tts_enabled", s.ttsEnabled)
             .putString("selected_tts_voice", s.selectedTtsVoice.id)
             .putString("preferred_en_tts", s.preferredEnglishTts.id)

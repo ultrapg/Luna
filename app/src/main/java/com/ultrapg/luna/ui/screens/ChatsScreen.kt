@@ -25,8 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +39,8 @@ import com.ultrapg.luna.assistant.LunaAssistantController
 import com.ultrapg.luna.core.database.ChatMessageEntity
 import com.ultrapg.luna.core.database.ChatSessionEntity
 import com.ultrapg.luna.core.database.LunaDatabase
+import com.ultrapg.luna.core.llm.ToolExecutionCodec
+import com.ultrapg.luna.core.llm.ToolExecutionRecord
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.overlay.LunaOverlayService
 import kotlinx.coroutines.flow.flowOf
@@ -384,7 +388,10 @@ fun ChatsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(items = messages, key = { it.id }) { msg ->
-                    ChatMessageBubble(msg = msg)
+                    ChatMessageBubble(
+                        msg = msg,
+                        isGerman = isGerman
+                    )
                 }
             }
         }
@@ -570,33 +577,165 @@ fun ChatsScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatMessageBubble(msg: ChatMessageEntity) {
+private fun ChatMessageBubble(
+    msg: ChatMessageEntity,
+    isGerman: Boolean
+) {
     val isUser = msg.role == "user"
+    val toolRecords = remember(msg.toolCallsSummary, isGerman) {
+        ToolExecutionCodec.decode(msg.toolCallsSummary, isGerman)
+    }
+    var selectedToolRecord by remember { mutableStateOf<ToolExecutionRecord?>(null) }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
-        if (msg.toolCallsSummary.isNotBlank()) {
-            AssistChip(
-                onClick = {},
-                label = {
-                    Text(
-                        text = msg.toolCallsSummary,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+        if (toolRecords.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                toolRecords.forEach { record ->
+                    val isSelected = selectedToolRecord == record
+                    AssistChip(
+                        onClick = {
+                            selectedToolRecord = if (isSelected) null else record
+                        },
+                        label = {
+                            Text(
+                                text = record.displayTitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = iconForToolName(record.toolName),
+                                contentDescription = record.displayTitle,
+                                modifier = Modifier.size(15.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = if (isSelected) {
+                                    Icons.Default.ExpandLess
+                                } else {
+                                    Icons.Default.ExpandMore
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     )
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.BuildCircle,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp)
-                    )
-                },
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
+                }
+            }
+
+            // Expandable inline detail panel when a tool icon/chip is clicked
+            AnimatedVisibility(visible = selectedToolRecord != null) {
+                val activeRecord = selectedToolRecord
+                if (activeRecord != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                        shape = RoundedCornerShape(16.dp),
+                        tonalElevation = 3.dp,
+                        modifier = Modifier
+                            .widthIn(max = 320.dp)
+                            .padding(bottom = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = iconForToolName(activeRecord.toolName),
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = activeRecord.displayTitle,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (activeRecord.durationMs > 0L) {
+                                        Text(
+                                            text = "• ${activeRecord.durationMs} ms",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { selectedToolRecord = null },
+                                    modifier = Modifier.size(22.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Close",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+
+                            if (activeRecord.whatItDid.isNotBlank()) {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = if (isGerman) "Was gemacht wurde" else "What it did",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = activeRecord.whatItDid,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+
+                            if (activeRecord.resultSummary.isNotBlank()) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = if (isGerman) "Ergebnis" else "Result",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = activeRecord.resultSummary,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Default,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Surface(
@@ -625,6 +764,24 @@ private fun ChatMessageBubble(msg: ChatMessageEntity) {
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
             )
         }
+    }
+}
+
+private fun iconForToolName(toolName: String): ImageVector {
+    return when (toolName.lowercase(Locale.ROOT)) {
+        "thinking", "thought", "gedacht" -> Icons.Default.Psychology
+        "search_duckduckgo" -> Icons.Default.Search
+        "read_website" -> Icons.Default.Language
+        "set_flashlight" -> Icons.Default.FlashlightOn
+        "open_app" -> Icons.Default.OpenInNew
+        "set_volume" -> Icons.AutoMirrored.Filled.VolumeUp
+        "set_alarm_or_timer" -> Icons.Default.Alarm
+        "get_device_status" -> Icons.Default.BatteryChargingFull
+        "open_system_settings" -> Icons.Default.Settings
+        "control_media" -> Icons.Default.PlayCircleOutline
+        "clipboard_action" -> Icons.Default.ContentPaste
+        "save_memory", "recall_memories", "forget_memory" -> Icons.Default.Memory
+        else -> Icons.Default.BuildCircle
     }
 }
 

@@ -386,6 +386,22 @@ fun OverlayConfigScreen(
                 )
 
                 SliderSettingRow(
+                    label = if (isGerman) {
+                        "Chat fortsetzen bis (danach neuer Chat)"
+                    } else {
+                        "Continue Same Chat Window (New Chat After)"
+                    },
+                    valueText = "${settings.sideButtonContinuationTimeoutSec} s",
+                    value = settings.sideButtonContinuationTimeoutSec.toFloat().coerceIn(5f, 90f),
+                    valueRange = 5f..90f,
+                    onValueChange = { sec ->
+                        LunaSettingsRepository.update(context) {
+                            it.copy(sideButtonContinuationTimeoutSec = sec.roundToInt().coerceIn(5, 180))
+                        }
+                    }
+                )
+
+                SliderSettingRow(
                     label = if (isGerman) "Pill-Breite" else "Pill Width",
                     valueText = "${settings.bubbleExpandedWidthDp} dp",
                     value = settings.bubbleExpandedWidthDp.toFloat().coerceIn(24f, 54f),
@@ -427,6 +443,7 @@ fun OverlayConfigScreen(
                                 bubbleExpandedHeightDp = 136,
                                 bubbleScale = 1.0f,
                                 silenceTimeoutMs = 3000L,
+                                sideButtonContinuationTimeoutSec = 20,
                                 bubbleKeepAliveDock = false
                             )
                         }
