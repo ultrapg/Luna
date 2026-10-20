@@ -209,6 +209,7 @@ data class LunaSettings(
 
     // Fast Local Female TTS Settings
     val ttsEnabled: Boolean = true,
+    val selectedTtsVoice: TtsVoiceModelId = TtsVoiceModelId.PIPER_DE_DII,
     val preferredEnglishTts: TtsVoiceModelId = TtsVoiceModelId.PIPER_EN_AMY,
     val preferredGermanTts: TtsVoiceModelId = TtsVoiceModelId.PIPER_DE_DII,
     val kokoroSpeakerId: Int = 0, // 0 = af_heart, 1 = af_bella, 2 = af_nicole, 3 = af_sarah
@@ -219,14 +220,14 @@ data class LunaSettings(
     val customTtsTokensPath: String = "",
     val customTtsDataDirPath: String = "",
 
-    // Gemini-Style Side-Button Horizontal Notch Bubble Settings
+    // Vertical Side-Notch Bubble Settings (Slim vertical pill flush with screen edge)
     val bubbleEdge: BubbleEdge = BubbleEdge.RIGHT,
     val bubbleVerticalFraction: Float = 0.28f, // 28% from top right next to physical power/side button
     val bubbleOffsetXDp: Int = 0,
-    val bubbleWidthDp: Int = 68,
-    val bubbleHeightDp: Int = 38,
-    val bubbleExpandedWidthDp: Int = 164,
-    val bubbleExpandedHeightDp: Int = 46,
+    val bubbleWidthDp: Int = 28,
+    val bubbleHeightDp: Int = 104,
+    val bubbleExpandedWidthDp: Int = 34,
+    val bubbleExpandedHeightDp: Int = 136,
     val bubbleScale: Float = 1.0f,
     val bubbleGlowIntensity: Float = 0.92f,
     val bubbleKeepAliveDock: Boolean = false,
@@ -329,6 +330,16 @@ object LunaSettingsRepository {
             autoSilenceStop = p.getBoolean("auto_silence_stop", true),
             silenceTimeoutMs = p.getLong("silence_timeout_ms", 3000L),
             ttsEnabled = p.getBoolean("tts_enabled", true),
+            selectedTtsVoice = TtsVoiceModelId.fromId(
+                p.getString(
+                    "selected_tts_voice",
+                    if (Locale.getDefault().language.startsWith("de")) {
+                        p.getString("preferred_de_tts", TtsVoiceModelId.PIPER_DE_DII.id)
+                    } else {
+                        p.getString("preferred_en_tts", TtsVoiceModelId.PIPER_EN_AMY.id)
+                    }
+                )
+            ),
             preferredEnglishTts = TtsVoiceModelId.fromId(p.getString("preferred_en_tts", TtsVoiceModelId.PIPER_EN_AMY.id)),
             preferredGermanTts = TtsVoiceModelId.fromId(p.getString("preferred_de_tts", TtsVoiceModelId.PIPER_DE_DII.id)),
             kokoroSpeakerId = p.getInt("kokoro_speaker_id", 0),
@@ -341,13 +352,13 @@ object LunaSettingsRepository {
             bubbleEdge = BubbleEdge.fromId(p.getString("bubble_edge", BubbleEdge.RIGHT.id)),
             bubbleVerticalFraction = p.getFloat("bubble_vertical_fraction", 0.28f).coerceIn(0.05f, 0.90f),
             bubbleOffsetXDp = p.getInt("bubble_offset_x_dp", 0),
-            bubbleWidthDp = p.getInt("bubble_width_dp", 68).coerceIn(44, 140),
-            bubbleHeightDp = p.getInt("bubble_height_dp", 38).coerceIn(28, 80),
-            bubbleExpandedWidthDp = p.getInt("bubble_expanded_width_dp", 164).coerceIn(120, 280),
-            bubbleExpandedHeightDp = p.getInt("bubble_expanded_height_dp", 46).coerceIn(36, 84),
+            bubbleWidthDp = p.getInt("vertical_notch_compact_w_dp", 28).coerceIn(20, 48),
+            bubbleHeightDp = p.getInt("vertical_notch_compact_h_dp", 104).coerceIn(72, 180),
+            bubbleExpandedWidthDp = p.getInt("vertical_notch_active_w_dp", 34).coerceIn(24, 54),
+            bubbleExpandedHeightDp = p.getInt("vertical_notch_active_h_dp", 136).coerceIn(88, 220),
             bubbleScale = p.getFloat("bubble_scale", 1.0f).coerceIn(0.6f, 1.8f),
             bubbleGlowIntensity = p.getFloat("bubble_glow_intensity", 0.92f).coerceIn(0.2f, 1.0f),
-            bubbleKeepAliveDock = p.getBoolean("bubble_keep_alive_dock", false),
+            bubbleKeepAliveDock = p.getBoolean("vertical_notch_keep_alive", false),
             webSearchEnabled = p.getBoolean("web_search_enabled", true),
             webReaderEnabled = p.getBoolean("web_reader_enabled", true),
             androidActionsEnabled = p.getBoolean("android_actions_enabled", true),
@@ -385,6 +396,7 @@ object LunaSettingsRepository {
             .putBoolean("auto_silence_stop", s.autoSilenceStop)
             .putLong("silence_timeout_ms", s.silenceTimeoutMs)
             .putBoolean("tts_enabled", s.ttsEnabled)
+            .putString("selected_tts_voice", s.selectedTtsVoice.id)
             .putString("preferred_en_tts", s.preferredEnglishTts.id)
             .putString("preferred_de_tts", s.preferredGermanTts.id)
             .putInt("kokoro_speaker_id", s.kokoroSpeakerId)
@@ -397,13 +409,13 @@ object LunaSettingsRepository {
             .putString("bubble_edge", s.bubbleEdge.id)
             .putFloat("bubble_vertical_fraction", s.bubbleVerticalFraction)
             .putInt("bubble_offset_x_dp", s.bubbleOffsetXDp)
-            .putInt("bubble_width_dp", s.bubbleWidthDp)
-            .putInt("bubble_height_dp", s.bubbleHeightDp)
-            .putInt("bubble_expanded_width_dp", s.bubbleExpandedWidthDp)
-            .putInt("bubble_expanded_height_dp", s.bubbleExpandedHeightDp)
+            .putInt("vertical_notch_compact_w_dp", s.bubbleWidthDp)
+            .putInt("vertical_notch_compact_h_dp", s.bubbleHeightDp)
+            .putInt("vertical_notch_active_w_dp", s.bubbleExpandedWidthDp)
+            .putInt("vertical_notch_active_h_dp", s.bubbleExpandedHeightDp)
             .putFloat("bubble_scale", s.bubbleScale)
             .putFloat("bubble_glow_intensity", s.bubbleGlowIntensity)
-            .putBoolean("bubble_keep_alive_dock", s.bubbleKeepAliveDock)
+            .putBoolean("vertical_notch_keep_alive", s.bubbleKeepAliveDock)
             .putBoolean("web_search_enabled", s.webSearchEnabled)
             .putBoolean("web_reader_enabled", s.webReaderEnabled)
             .putBoolean("android_actions_enabled", s.androidActionsEnabled)

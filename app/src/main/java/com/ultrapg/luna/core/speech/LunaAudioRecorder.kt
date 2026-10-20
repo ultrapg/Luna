@@ -14,7 +14,6 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.SystemClock
 import android.util.Log
@@ -36,20 +35,20 @@ import kotlin.math.sqrt
 
 /**
  * Captures 16 kHz mono 16-bit PCM audio on-device for Desert Ant Labs `Ear` & `Voz`
- * and computes real-time RMS + 5-band audio spectrum amplitudes to drive the horizontal
- * side-notch pill equalizer.
+ * and computes real-time RMS + 5-band audio spectrum amplitudes to drive the slim vertical
+ * side-notch equalizer.
  *
- * Includes adaptive VAD end-of-utterance detection: once the user speaks and then stays
- * silent for `silenceTimeoutMs` (default 3000 ms / 3 seconds), it automatically triggers
- * transcription and assistant execution just like Gemini.
+ * Includes adaptive VAD end-of-utterance detection without AGC (so background room noise is
+ * never artificially boosted) and guarantees hardware microphone release when stopped or cancelled.
  */
 class LunaAudioRecorder {
     companion object {
         private const val TAG = "LunaAudioRecorder"
         const val SAMPLE_RATE = 16000
         private const val INITIAL_CAPACITY_SAMPLES = SAMPLE_RATE * 15
-        private const val MAX_RECORDING_SAMPLES = SAMPLE_RATE * 240 // 4 minutes max
-        private const val MIN_SPEECH_RMS_THRESHOLD = 0.095f
+        private const val MAX_RECORDING_SAMPLES = SAMPLE_RATE * 120
+        private const val MIN_SPEECH_RMS_THRESHOLD = 0.115f
+        private const val MAX_LISTEN_DURATION_MS = 25000L
     }
 
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
@@ -57,7 +56,6 @@ class LunaAudioRecorder {
 
     private var audioRecord: AudioRecord? = null
     private var noiseSuppressor: NoiseSuppressor? = null
-    private var agc: AutomaticGainControl? = null
     private var recordingJob: Job? = null
 
     private val bufferLock = Any()
@@ -111,12 +109,10 @@ class LunaAudioRecorder {
             pcmSize = 0
         }
 
+        // Only attach NoiseSuppressor (do NOT attach AutomaticGainControl, which boosts silent room noise)
         runCatching {
             if (NoiseSuppressor.isAvailable()) {
                 noiseSuppressor = NoiseSuppressor.create(record.audioSessionId)?.apply { enabled = true }
-            }
-            if (AutomaticGainControl.isAvailable()) {
-                agc = AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true }
             }
         }
 
@@ -139,69 +135,90 @@ class LunaAudioRecorder {
             val shortBuffer = ShortArray(1024)
             var hasHeardSpeech = false
             var lastSpeechMs = SystemClock.elapsedRealtime()
-            var noiseFloor = 0.03f
+            var noiseFloor = 0.04f
+            var autoTriggered = false
 
-            while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                val readCount = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
-                if (readCount > 0) {
-                    var sumSquares = 0.0
-                    val bandAccum = FloatArray(5)
-                    val bandBucketSize = (readCount / 5).coerceAtLeast(1)
+            try {
+                while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    val readCount = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
+                    if (readCount > 0) {
+                        var sumSquares = 0.0
+                        val bandAccum = FloatArray(5)
+                        val bandBucketSize = (readCount / 5).coerceAtLeast(1)
 
-                    synchronized(bufferLock) {
-                        val currentBuf = pcmBuffer ?: FloatArray(INITIAL_CAPACITY_SAMPLES).also { pcmBuffer = it }
-                        val available = MAX_RECORDING_SAMPLES - pcmSize
-                        val toCopy = min(readCount, available)
-                        val targetBuf = if (pcmSize + toCopy > currentBuf.size) {
-                            val grown = min(MAX_RECORDING_SAMPLES, maxOf(pcmSize + toCopy, currentBuf.size + SAMPLE_RATE * 20))
-                            runCatching { currentBuf.copyOf(grown).also { pcmBuffer = it } }.getOrDefault(currentBuf)
+                        synchronized(bufferLock) {
+                            val currentBuf = pcmBuffer ?: FloatArray(INITIAL_CAPACITY_SAMPLES).also { pcmBuffer = it }
+                            val available = MAX_RECORDING_SAMPLES - pcmSize
+                            val toCopy = min(readCount, available)
+                            val targetBuf = if (pcmSize + toCopy > currentBuf.size) {
+                                val grown = min(MAX_RECORDING_SAMPLES, maxOf(pcmSize + toCopy, currentBuf.size + SAMPLE_RATE * 20))
+                                runCatching { currentBuf.copyOf(grown).also { pcmBuffer = it } }.getOrDefault(currentBuf)
+                            } else {
+                                currentBuf
+                            }
+                            val actualCopy = min(toCopy, targetBuf.size - pcmSize)
+                            for (i in 0 until actualCopy) {
+                                val norm = shortBuffer[i] / 32768.0f
+                                sumSquares += norm * norm
+                                targetBuf[pcmSize + i] = norm
+                                val bandIdx = (i / bandBucketSize).coerceIn(0, 4)
+                                bandAccum[bandIdx] += abs(norm)
+                            }
+                            pcmSize += actualCopy
+                        }
+
+                        val rawRms = sqrt(sumSquares / readCount).toFloat()
+                        val scaledRms = (rawRms * 4.5f).coerceIn(0f, 1f)
+                        _rmsLevel.value = _rmsLevel.value * 0.35f + scaledRms * 0.65f
+
+                        val prevBands = _waveBands.value
+                        val nextBands = FloatArray(5) { idx ->
+                            val avg = (bandAccum[idx] / bandBucketSize) * 5.8f
+                            (prevBands[idx] * 0.3f + avg * 0.7f).coerceIn(0.06f, 1.0f)
+                        }
+                        _waveBands.value = nextBands
+
+                        // Asymmetric noise floor envelope tracker
+                        noiseFloor = if (scaledRms < noiseFloor) {
+                            (noiseFloor * 0.85f + scaledRms * 0.15f).coerceIn(0.015f, 0.18f)
                         } else {
-                            currentBuf
+                            (noiseFloor * 0.992f + scaledRms * 0.008f).coerceIn(0.015f, 0.18f)
                         }
-                        val actualCopy = min(toCopy, targetBuf.size - pcmSize)
-                        for (i in 0 until actualCopy) {
-                            val norm = shortBuffer[i] / 32768.0f
-                            sumSquares += norm * norm
-                            targetBuf[pcmSize + i] = norm
-                            val bandIdx = (i / bandBucketSize).coerceIn(0, 4)
-                            bandAccum[bandIdx] += abs(norm)
-                        }
-                        pcmSize += actualCopy
-                    }
+                        val dynamicThreshold = max(MIN_SPEECH_RMS_THRESHOLD, noiseFloor * 1.95f)
 
-                    val rawRms = sqrt(sumSquares / readCount).toFloat()
-                    val scaledRms = (rawRms * 5.2f).coerceIn(0f, 1f)
-                    _rmsLevel.value = _rmsLevel.value * 0.35f + scaledRms * 0.65f
-
-                    val prevBands = _waveBands.value
-                    val nextBands = FloatArray(5) { idx ->
-                        val avg = (bandAccum[idx] / bandBucketSize) * 6.5f
-                        (prevBands[idx] * 0.3f + avg * 0.7f).coerceIn(0.06f, 1.0f)
-                    }
-                    _waveBands.value = nextBands
-
-                    // Adaptive noise floor tracking during quiet frames
-                    if (scaledRms < noiseFloor * 1.5f) {
-                        noiseFloor = (noiseFloor * 0.92f + scaledRms * 0.08f).coerceIn(0.015f, 0.12f)
-                    }
-                    val dynamicThreshold = max(MIN_SPEECH_RMS_THRESHOLD, noiseFloor * 2.2f)
-
-                    val now = SystemClock.elapsedRealtime()
-                    if (scaledRms >= dynamicThreshold) {
-                        hasHeardSpeech = true
-                        lastSpeechMs = now
-                    } else if (autoStopOnSilence && (now - startMs > 1000L)) {
-                        val silenceElapsed = now - lastSpeechMs
-                        // Trigger auto-send after 3s of silence once speech was heard
-                        // (or after 4.5s if the user spoke very softly)
-                        if ((hasHeardSpeech && silenceElapsed >= effectiveSilenceTimeout) ||
-                            (!hasHeardSpeech && silenceElapsed >= effectiveSilenceTimeout + 1500L)
-                        ) {
-                            onAutoSilenceDetected?.invoke()
-                            break
+                        val now = SystemClock.elapsedRealtime()
+                        if (scaledRms >= dynamicThreshold) {
+                            hasHeardSpeech = true
+                            lastSpeechMs = now
+                        } else if (autoStopOnSilence && (now - startMs > 900L)) {
+                            val silenceElapsed = now - lastSpeechMs
+                            if ((hasHeardSpeech && silenceElapsed >= effectiveSilenceTimeout) ||
+                                (!hasHeardSpeech && silenceElapsed >= effectiveSilenceTimeout + 1200L) ||
+                                (now - startMs >= MAX_LISTEN_DURATION_MS)
+                            ) {
+                                autoTriggered = true
+                                break
+                            }
                         }
                     }
                 }
+            } finally {
+                // Always stop and release hardware mic when the loop exits or is cancelled
+                runCatching {
+                    if (record.state == AudioRecord.STATE_INITIALIZED &&
+                        record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+                    ) {
+                        record.stop()
+                    }
+                }
+                releaseHardware()
+                _isRecording.value = false
+                _rmsLevel.value = 0f
+                _waveBands.value = floatArrayOf(0.06f, 0.06f, 0.06f, 0.06f, 0.06f)
+            }
+
+            if (autoTriggered) {
+                onAutoSilenceDetected?.invoke()
             }
         }
         true
@@ -243,9 +260,7 @@ class LunaAudioRecorder {
     private fun releaseHardware() {
         runCatching { audioRecord?.release() }
         runCatching { noiseSuppressor?.release() }
-        runCatching { agc?.release() }
         audioRecord = null
         noiseSuppressor = null
-        agc = null
     }
 }

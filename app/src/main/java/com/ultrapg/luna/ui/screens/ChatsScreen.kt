@@ -3,12 +3,16 @@ package com.ultrapg.luna.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -16,12 +20,15 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,27 +51,31 @@ fun ChatsScreen(
     onRequestMicPermission: () -> Boolean
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val db = remember { LunaDatabase.getInstance(context) }
     val settings by LunaSettingsRepository.settingsFlow.collectAsState()
     val uiState by LunaAssistantController.liveState.collectAsState()
 
     val sessions by db.chatDao().observeAllSessions().collectAsState(initial = emptyList())
-    var selectedSessionId by remember { mutableStateOf<Long?>(null) }
+    var didInitialAutoSelect by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(uiState.activeSessionId, sessions) {
-        if (uiState.activeSessionId != null) {
-            selectedSessionId = uiState.activeSessionId
-        } else if (selectedSessionId == null && sessions.isNotEmpty()) {
-            selectedSessionId = sessions.first().id
-            LunaAssistantController.selectSession(sessions.first().id)
+    // Only auto-select the latest session once on cold launch if no session was explicitly chosen
+    LaunchedEffect(sessions) {
+        if (!didInitialAutoSelect && sessions.isNotEmpty()) {
+            didInitialAutoSelect = true
+            if (uiState.activeSessionId == null) {
+                LunaAssistantController.selectSession(sessions.first().id)
+            }
         }
     }
 
+    val selectedSessionId = uiState.activeSessionId
+    val currentSession = sessions.firstOrNull { it.id == selectedSessionId }
+
     val messagesFlow = remember(selectedSessionId) {
-        val id = selectedSessionId
-        if (id != null) {
-            db.chatDao().observeMessagesForSession(id)
+        if (selectedSessionId != null) {
+            db.chatDao().observeMessagesForSession(selectedSessionId)
         } else {
             flowOf(emptyList())
         }
@@ -72,11 +83,11 @@ fun ChatsScreen(
     val messages by messagesFlow.collectAsState(initial = emptyList())
 
     var showHistorySheet by remember { mutableStateOf(false) }
-    var inputText by remember { mutableStateOf("") }
+    var inputText by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val isGerman = settings.appLanguage.isGerman
 
-    LaunchedEffect(messages.size) {
+    LaunchedEffect(messages.size, selectedSessionId) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
@@ -117,8 +128,8 @@ fun ChatsScreen(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = sessions.firstOrNull { it.id == selectedSessionId }?.title
-                            ?: "Luna",
+                        text = currentSession?.title
+                            ?: if (isGerman) "Neuer Chat" else "New Chat",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -158,22 +169,24 @@ fun ChatsScreen(
                     )
                 }
 
-                IconButton(
-                    onClick = {
-                        if (onRequestMicPermission()) {
-                            LunaOverlayService.startOrTrigger(context, startListening = true)
+                if (selectedSessionId != null) {
+                    IconButton(
+                        onClick = {
+                            LunaAssistantController.deleteSession(context, selectedSessionId)
                         }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Delete Current Chat",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SmartButton,
-                        contentDescription = "Launch Pill"
-                    )
                 }
 
                 FilledTonalIconButton(
                     onClick = {
-                        selectedSessionId = null
+                        didInitialAutoSelect = true
+                        inputText = ""
                         LunaAssistantController.startNewSession()
                     },
                     modifier = Modifier.size(38.dp)
@@ -182,6 +195,52 @@ fun ChatsScreen(
                         imageVector = Icons.Default.Add,
                         contentDescription = "New Chat",
                         modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        // Quick Horizontal Session Switcher Bar
+        if (sessions.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = selectedSessionId == null,
+                    onClick = {
+                        didInitialAutoSelect = true
+                        inputText = ""
+                        LunaAssistantController.startNewSession()
+                    },
+                    label = {
+                        Text(
+                            text = if (isGerman) "+ Neuer Chat" else "+ New Chat",
+                            maxLines = 1
+                        )
+                    },
+                    shape = RoundedCornerShape(50)
+                )
+
+                sessions.take(10).forEach { session ->
+                    FilterChip(
+                        selected = session.id == selectedSessionId,
+                        onClick = {
+                            didInitialAutoSelect = true
+                            LunaAssistantController.selectSession(session.id)
+                        },
+                        label = {
+                            Text(
+                                text = session.title.take(24),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        shape = RoundedCornerShape(50)
                     )
                 }
             }
@@ -233,7 +292,7 @@ fun ChatsScreen(
 
                     if (uiState.phase == AssistantOverlayPhase.LISTENING) {
                         TextButton(onClick = { LunaAssistantController.finishListeningAndProcess(context) }) {
-                            Text(if (isGerman) "Fertig" else "Done")
+                            Text(if (isGerman) "Senden" else "Send")
                         }
                     } else {
                         IconButton(
@@ -276,8 +335,8 @@ fun ChatsScreen(
                     }
 
                     Text(
-                        text = "Luna",
-                        style = MaterialTheme.typography.headlineSmall,
+                        text = if (isGerman) "Neuer Chat mit Luna" else "New Chat with Luna",
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold
                     )
 
@@ -301,7 +360,10 @@ fun ChatsScreen(
                     ) {
                         suggestions.forEach { prompt ->
                             SuggestionChip(
-                                onClick = { LunaAssistantController.submitTextFromOverlay(context, prompt) },
+                                onClick = {
+                                    didInitialAutoSelect = true
+                                    LunaAssistantController.submitTextFromChat(context, prompt)
+                                },
                                 label = { Text(prompt) },
                                 shape = RoundedCornerShape(50)
                             )
@@ -335,10 +397,11 @@ fun ChatsScreen(
             IconButton(
                 onClick = {
                     if (onRequestMicPermission()) {
+                        didInitialAutoSelect = true
                         if (uiState.phase == AssistantOverlayPhase.LISTENING) {
                             LunaAssistantController.finishListeningAndProcess(context)
                         } else {
-                            LunaAssistantController.startVoiceListening(context)
+                            LunaAssistantController.startVoiceListening(context, showOverlay = false)
                         }
                     }
                 },
@@ -376,15 +439,29 @@ fun ChatsScreen(
                 },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(50),
-                singleLine = true
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(
+                    onSend = {
+                        val trimmed = inputText.trim()
+                        if (trimmed.isNotEmpty() && !isBusy) {
+                            didInitialAutoSelect = true
+                            inputText = ""
+                            focusManager.clearFocus()
+                            LunaAssistantController.submitTextFromChat(context, trimmed)
+                        }
+                    }
+                )
             )
 
             FilledIconButton(
                 onClick = {
                     val trimmed = inputText.trim()
                     if (trimmed.isNotEmpty()) {
+                        didInitialAutoSelect = true
                         inputText = ""
-                        LunaAssistantController.submitTextFromOverlay(context, trimmed)
+                        focusManager.clearFocus()
+                        LunaAssistantController.submitTextFromChat(context, trimmed)
                     }
                 },
                 enabled = inputText.isNotBlank() && !isBusy,
@@ -415,17 +492,34 @@ fun ChatsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    if (sessions.isNotEmpty()) {
-                        TextButton(
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(
                             onClick = {
-                                scope.launch {
-                                    db.chatDao().deleteAllSessions()
-                                    selectedSessionId = null
-                                    LunaAssistantController.startNewSession()
-                                }
-                            }
+                                didInitialAutoSelect = true
+                                inputText = ""
+                                LunaAssistantController.startNewSession()
+                                showHistorySheet = false
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(50)
                         ) {
-                            Text(if (isGerman) "Alle löschen" else "Clear All")
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (isGerman) "Neu" else "New", maxLines = 1)
+                        }
+                        if (sessions.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        didInitialAutoSelect = true
+                                        db.chatDao().deleteAllSessions()
+                                        LunaAssistantController.startNewSession()
+                                        showHistorySheet = false
+                                    }
+                                }
+                            ) {
+                                Text(if (isGerman) "Alle löschen" else "Clear All")
+                            }
                         }
                     }
                 }
@@ -456,15 +550,12 @@ fun ChatsScreen(
                                 session = session,
                                 isSelected = session.id == selectedSessionId,
                                 onSelect = {
-                                    selectedSessionId = session.id
+                                    didInitialAutoSelect = true
                                     LunaAssistantController.selectSession(session.id)
                                     showHistorySheet = false
                                 },
                                 onDelete = {
                                     LunaAssistantController.deleteSession(context, session.id)
-                                    if (selectedSessionId == session.id) {
-                                        selectedSessionId = null
-                                    }
                                 }
                             )
                         }

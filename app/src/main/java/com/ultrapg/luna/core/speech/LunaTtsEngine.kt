@@ -291,14 +291,22 @@ class LunaTtsEngine private constructor(context: Context) {
             }
         }
 
-        // 2. Check Downloaded Neural Voice for the target language (DE vs EN)
+        // 2. Check User's Selected Active Voice first, then language-matched fallbacks
+        val selectedModelId = when (settings.selectedTtsVoice) {
+            TtsVoiceModelId.PIPER_EN_AMY -> LocalModelId.TTS_PIPER_EN_AMY
+            TtsVoiceModelId.KOKORO_EN_HEART -> LocalModelId.TTS_KOKORO_EN_HEART
+            TtsVoiceModelId.PIPER_DE_DII -> LocalModelId.TTS_PIPER_DE_DII
+            TtsVoiceModelId.PIPER_DE_KERSTIN -> LocalModelId.TTS_PIPER_DE_KERSTIN
+            else -> null
+        }
         val isDe = langCode.startsWith("de")
         if (isDe) {
             val preferredDe = when (settings.preferredGermanTts) {
                 TtsVoiceModelId.PIPER_DE_KERSTIN -> LocalModelId.TTS_PIPER_DE_KERSTIN
                 else -> LocalModelId.TTS_PIPER_DE_DII
             }
-            val deCandidates = listOf(
+            val deCandidates = listOfNotNull(
+                selectedModelId?.takeIf { it == LocalModelId.TTS_PIPER_DE_DII || it == LocalModelId.TTS_PIPER_DE_KERSTIN },
                 preferredDe,
                 LocalModelId.TTS_PIPER_DE_DII,
                 LocalModelId.TTS_PIPER_DE_KERSTIN
@@ -350,7 +358,8 @@ class LunaTtsEngine private constructor(context: Context) {
                 TtsVoiceModelId.KOKORO_EN_HEART -> LocalModelId.TTS_KOKORO_EN_HEART
                 else -> LocalModelId.TTS_PIPER_EN_AMY
             }
-            val enCandidates = listOf(
+            val enCandidates = listOfNotNull(
+                selectedModelId?.takeIf { it == LocalModelId.TTS_PIPER_EN_AMY || it == LocalModelId.TTS_KOKORO_EN_HEART },
                 preferredEn,
                 LocalModelId.TTS_PIPER_EN_AMY,
                 LocalModelId.TTS_KOKORO_EN_HEART

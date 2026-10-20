@@ -28,6 +28,7 @@ import android.util.Log
 import android.view.ContextThemeWrapper
 import android.view.Display
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -146,6 +147,7 @@ object LunaOverlayWindowManager {
             windowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -169,7 +171,17 @@ object LunaOverlayWindowManager {
             handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         }
 
-        val container = FrameLayout(visualContext).apply {
+        val container = object : FrameLayout(visualContext) {
+            override fun onTouchEvent(event: MotionEvent?): Boolean {
+                if (event?.action == MotionEvent.ACTION_OUTSIDE ||
+                    event?.actionMasked == MotionEvent.ACTION_OUTSIDE
+                ) {
+                    LunaAssistantController.dismissOverlay(visualContext)
+                    return true
+                }
+                return super.onTouchEvent(event)
+            }
+        }.apply {
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
@@ -245,6 +257,7 @@ object LunaOverlayWindowManager {
 
         lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
         runCatching { wm.updateViewLayout(view, lp) }

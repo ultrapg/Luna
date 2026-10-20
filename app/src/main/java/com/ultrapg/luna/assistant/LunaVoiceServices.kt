@@ -27,6 +27,7 @@ import android.speech.RecognitionService
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -144,6 +145,7 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
             params.height = ViewGroup.LayoutParams.MATCH_PARENT
             params.flags = (params.flags
                 or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                 or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS) and
                 WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
@@ -166,7 +168,18 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
         }
         lifecycleOwner = owner
 
-        val root = FrameLayout(themedContext).apply {
+        val root = object : FrameLayout(themedContext) {
+            override fun onTouchEvent(event: MotionEvent?): Boolean {
+                if (event?.action == MotionEvent.ACTION_OUTSIDE ||
+                    event?.action == MotionEvent.ACTION_DOWN
+                ) {
+                    LunaAssistantController.dismissOverlay(themedContext)
+                    hide()
+                    return true
+                }
+                return super.onTouchEvent(event)
+            }
+        }.apply {
             setBackgroundColor(Color.TRANSPARENT)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -338,6 +351,7 @@ class AssistTrampolineActivity : ComponentActivity() {
             y = (screenHeight * settings.bubbleVerticalFraction).toInt()
             flags = (flags
                 or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN) and
                 WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
             dimAmount = 0f
@@ -356,50 +370,71 @@ class AssistTrampolineActivity : ComponentActivity() {
                 val ttsRms by ttsEngine.outputRms.collectAsState()
                 val isSpeaking by ttsEngine.isSpeaking.collectAsState()
 
-                GeminiSidePillOverlay(
-                    liveState = liveState.copy(isVisible = true, isExpanded = true),
-                    settings = curSettings,
-                    micRms = micRms,
-                    waveBands = waveBands,
-                    ttsRms = ttsRms,
-                    isSpeaking = isSpeaking,
-                    onDragDelta = { dx, dy ->
-                        horizontalDragAccumPx += dx
-                        val snapThreshold = 56f * density
-                        var newEdge = curSettings.bubbleEdge
-                        if (curSettings.bubbleEdge == BubbleEdge.RIGHT && horizontalDragAccumPx < -snapThreshold) {
-                            newEdge = BubbleEdge.LEFT
-                            horizontalDragAccumPx = 0f
-                        } else if (curSettings.bubbleEdge == BubbleEdge.LEFT && horizontalDragAccumPx > snapThreshold) {
-                            newEdge = BubbleEdge.RIGHT
-                            horizontalDragAccumPx = 0f
-                        }
-                        val newFrac = (curSettings.bubbleVerticalFraction + dy / screenHeight).coerceIn(0.04f, 0.90f)
-                        LunaSettingsRepository.update(this@AssistTrampolineActivity) {
-                            it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
-                        }
-                        window.attributes = window.attributes.apply {
-                            gravity = when (newEdge) {
-                                BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
-                                BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
-                                BubbleEdge.FREE -> Gravity.END or Gravity.TOP
-                            }
-                            y = (screenHeight * newFrac).toInt()
-                        }
-                    },
-                    onToggleExpand = {},
-                    onDismiss = {
-                        LunaAssistantController.dismissOverlay(this@AssistTrampolineActivity)
+                androidx.compose.runtime.LaunchedEffect(liveState.isVisible) {
+                    if (!liveState.isVisible) {
                         finish()
                         @Suppress("DEPRECATION")
                         overridePendingTransition(0, 0)
                     }
-                )
+                }
+
+                if (liveState.isVisible) {
+                    GeminiSidePillOverlay(
+                        liveState = liveState,
+                        settings = curSettings,
+                        micRms = micRms,
+                        waveBands = waveBands,
+                        ttsRms = ttsRms,
+                        isSpeaking = isSpeaking,
+                        onDragDelta = { dx, dy ->
+                            horizontalDragAccumPx += dx
+                            val snapThreshold = 56f * density
+                            var newEdge = curSettings.bubbleEdge
+                            if (curSettings.bubbleEdge == BubbleEdge.RIGHT && horizontalDragAccumPx < -snapThreshold) {
+                                newEdge = BubbleEdge.LEFT
+                                horizontalDragAccumPx = 0f
+                            } else if (curSettings.bubbleEdge == BubbleEdge.LEFT && horizontalDragAccumPx > snapThreshold) {
+                                newEdge = BubbleEdge.RIGHT
+                                horizontalDragAccumPx = 0f
+                            }
+                            val newFrac = (curSettings.bubbleVerticalFraction + dy / screenHeight).coerceIn(0.04f, 0.90f)
+                            LunaSettingsRepository.update(this@AssistTrampolineActivity) {
+                                it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
+                            }
+                            window.attributes = window.attributes.apply {
+                                gravity = when (newEdge) {
+                                    BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
+                                    BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
+                                    BubbleEdge.FREE -> Gravity.END or Gravity.TOP
+                                }
+                                y = (screenHeight * newFrac).toInt()
+                            }
+                        },
+                        onToggleExpand = {},
+                        onDismiss = {
+                            LunaAssistantController.dismissOverlay(this@AssistTrampolineActivity)
+                            finish()
+                            @Suppress("DEPRECATION")
+                            overridePendingTransition(0, 0)
+                        }
+                    )
+                }
             }
         }
 
         setContentView(composeView)
         LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
+    }
+
+    override fun onTouchEvent(event: MotionEvent?): Boolean {
+        if (event?.action == MotionEvent.ACTION_OUTSIDE) {
+            LunaAssistantController.dismissOverlay(this)
+            finish()
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+            return true
+        }
+        return super.onTouchEvent(event)
     }
 
     override fun onNewIntent(intent: Intent) {

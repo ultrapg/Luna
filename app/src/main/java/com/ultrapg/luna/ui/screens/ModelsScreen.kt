@@ -3,6 +3,7 @@ package com.ultrapg.luna.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -221,14 +222,15 @@ fun ModelsScreen() {
 
                     FilledTonalButton(
                         onClick = {
-                            val sample = if (isGerman) {
+                            val activeLang = if (settings.selectedTtsVoice.langCode == "de") "de" else "en"
+                            val sample = if (activeLang == "de") {
                                 "Hallo! Ich bin Luna."
                             } else {
                                 "Hi! I am Luna."
                             }
                             LunaTtsEngine.getInstance(context).speak(
                                 text = sample,
-                                languageCode = if (isGerman) "de" else "en"
+                                languageCode = activeLang
                             )
                         },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -278,11 +280,8 @@ fun ModelsScreen() {
                     key(modelId, refreshTrigger, dlState.modelStatuses[modelId], dlState.isCompleted) {
                         val isInstalled = LocalModelStorage.isModelDownloaded(context, modelId)
                         val queueStatus = dlState.modelStatuses[modelId]
-                        val isSelected = if (voiceEnum.langCode == "de") {
-                            settings.preferredGermanTts == voiceEnum
-                        } else {
-                            settings.preferredEnglishTts == voiceEnum
-                        }
+                        // Single active selection across the list so only 1 voice is "Aktiv" at a time
+                        val isSelected = !settings.useCustomTtsModel && settings.selectedTtsVoice == voiceEnum
 
                         ModelItemRow(
                             model = modelId,
@@ -301,11 +300,12 @@ fun ModelsScreen() {
                             },
                             onSelect = {
                                 LunaSettingsRepository.update(context) { cur ->
-                                    if (voiceEnum.langCode == "de") {
-                                        cur.copy(preferredGermanTts = voiceEnum, useCustomTtsModel = false)
-                                    } else {
-                                        cur.copy(preferredEnglishTts = voiceEnum, useCustomTtsModel = false)
-                                    }
+                                    cur.copy(
+                                        selectedTtsVoice = voiceEnum,
+                                        preferredGermanTts = if (voiceEnum.langCode == "de") voiceEnum else cur.preferredGermanTts,
+                                        preferredEnglishTts = if (voiceEnum.langCode == "en") voiceEnum else cur.preferredEnglishTts,
+                                        useCustomTtsModel = false
+                                    )
                                 }
                             }
                         )
@@ -421,10 +421,11 @@ private fun ModelItemRow(
     onSelect: (() -> Unit)?
 ) {
     Surface(
-        color = if (isSelected) {
-            MaterialTheme.colorScheme.secondaryContainer
+        color = MaterialTheme.colorScheme.surface,
+        border = if (isSelected) {
+            BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
         } else {
-            MaterialTheme.colorScheme.surface
+            null
         },
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth()
@@ -440,7 +441,7 @@ private fun ModelItemRow(
                 Text(
                     text = if (isGerman) model.displayNameDe else model.displayNameEn,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -448,7 +449,7 @@ private fun ModelItemRow(
                     text = "${model.sizeMb} MB • ${if (isGerman) model.roleDe else model.roleEn}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -459,19 +460,34 @@ private fun ModelItemRow(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (onSelect != null) {
-                        FilledTonalButton(
-                            onClick = onSelect,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = if (isSelected) {
-                                    if (isGerman) "Aktiv" else "Active"
-                                } else {
-                                    if (isGerman) "Wählen" else "Use"
-                                },
-                                maxLines = 1
-                            )
+                        if (isSelected) {
+                            Button(
+                                onClick = onSelect,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = if (isGerman) "Aktiv" else "Active",
+                                    maxLines = 1
+                                )
+                            }
+                        } else {
+                            FilledTonalButton(
+                                onClick = onSelect,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Text(
+                                    text = if (isGerman) "Wählen" else "Use",
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                     IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {

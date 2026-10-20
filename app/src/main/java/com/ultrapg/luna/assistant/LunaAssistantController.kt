@@ -21,10 +21,12 @@ import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.speech.LunaAudioRecorder
 import com.ultrapg.luna.core.speech.LunaSpeechPipeline
 import com.ultrapg.luna.core.speech.LunaTtsEngine
+import com.ultrapg.luna.overlay.LunaOverlayWindowManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,7 +56,7 @@ data class AssistantLiveState(
 /**
  * Central coordinator that connects:
  * - Side-button Digital Assistant triggers (`VoiceInteractionSession`, `AssistTrampolineActivity`, `AccessibilityService`)
- * - Local audio recording + VAD (`LunaAudioRecorder`)
+ * - Local audio recording + 3s silence auto-send (`LunaAudioRecorder`)
  * - On-device Desert Ant Labs `Ear` + `Voz` STT (`LunaSpeechPipeline`)
  * - OpenAI-compatible Agent Loop + Android Tools + DuckDuckGo + MCP (`OpenAiAgentEngine`)
  * - Fast local neural Female TTS (`LunaTtsEngine`)
@@ -113,7 +115,6 @@ object LunaAssistantController {
 
         val current = _liveState.value
         if (current.isVisible && current.phase == AssistantOverlayPhase.LISTENING) {
-            // Pressing the side button again while listening stops recording and processes immediately
             finishListeningAndProcess(appContext)
             return
         }
@@ -130,7 +131,7 @@ object LunaAssistantController {
         )
 
         if (startListeningImmediately) {
-            startVoiceListening(appContext)
+            startVoiceListening(appContext, showOverlay = true)
         }
     }
 
@@ -144,6 +145,10 @@ object LunaAssistantController {
         )
     }
 
+    /**
+     * Immediately stops all recording, thinking, and TTS playback, and hides the bubble overlay.
+     * Invoked when the user taps anywhere outside the bubble on the screen or long-presses the bubble.
+     */
     fun dismissOverlay(context: Context) {
         val appContext = context.applicationContext
         activeTurnJob?.cancel()
@@ -159,6 +164,9 @@ object LunaAssistantController {
             phase = AssistantOverlayPhase.IDLE_NOTCH,
             statusBadge = ""
         )
+        if (!keepDock) {
+            LunaOverlayWindowManager.detachOverlay()
+        }
     }
 
     fun toggleListeningFromPill(context: Context) {
@@ -167,8 +175,10 @@ object LunaAssistantController {
         when (current.phase) {
             AssistantOverlayPhase.LISTENING -> finishListeningAndProcess(appContext)
             AssistantOverlayPhase.SPEAKING -> {
-                LunaTtsEngine.getInstance(appContext).stopSpeaking()
-                _liveState.value = current.copy(phase = AssistantOverlayPhase.RESULT_CARD)
+                dismissOverlay(appContext)
+            }
+            AssistantOverlayPhase.THINKING, AssistantOverlayPhase.TRANSCRIBING -> {
+                dismissOverlay(appContext)
             }
             else -> {
                 _liveState.value = current.copy(
@@ -178,12 +188,12 @@ object LunaAssistantController {
                     assistantReply = "",
                     executedTools = emptyList()
                 )
-                startVoiceListening(appContext)
+                startVoiceListening(appContext, showOverlay = true)
             }
         }
     }
 
-    fun startVoiceListening(context: Context) {
+    fun startVoiceListening(context: Context, showOverlay: Boolean = true) {
         val appContext = context.applicationContext
         val settings = LunaSettingsRepository.current(appContext)
         val isDe = settings.appLanguage.isGerman
@@ -194,8 +204,8 @@ object LunaAssistantController {
         activeTurnJob?.cancel()
         activeTurnJob = scope.launch {
             _liveState.value = _liveState.value.copy(
-                isVisible = true,
-                isExpanded = true,
+                isVisible = showOverlay || _liveState.value.isVisible,
+                isExpanded = showOverlay || _liveState.value.isExpanded,
                 phase = AssistantOverlayPhase.LISTENING,
                 statusBadge = if (isDe) "Höre zu..." else "Listening..."
             )
@@ -221,6 +231,10 @@ object LunaAssistantController {
                     },
                     statusBadge = ""
                 )
+                delay(1500)
+                if (_liveState.value.isVisible) {
+                    dismissOverlay(appContext)
+                }
             }
         }
     }
@@ -234,11 +248,7 @@ object LunaAssistantController {
         activeTurnJob = scope.launch {
             val samples = audioRecorder.stopRecording()
             if (samples.isEmpty()) {
-                _liveState.value = _liveState.value.copy(
-                    phase = AssistantOverlayPhase.IDLE_NOTCH,
-                    isExpanded = false,
-                    statusBadge = ""
-                )
+                dismissOverlay(appContext)
                 return@launch
             }
 
@@ -260,15 +270,15 @@ object LunaAssistantController {
                     assistantReply = t.message ?: "Speech transcription failed.",
                     statusBadge = ""
                 )
+                delay(1200)
+                if (_liveState.value.isVisible) {
+                    dismissOverlay(appContext)
+                }
                 return@launch
             }
 
             if (sttResult.text.isBlank()) {
-                _liveState.value = _liveState.value.copy(
-                    phase = AssistantOverlayPhase.RESULT_CARD,
-                    assistantReply = if (isDe) "Keine Sprache erkannt." else "No speech detected.",
-                    statusBadge = ""
-                )
+                dismissOverlay(appContext)
                 return@launch
             }
 
@@ -287,7 +297,10 @@ object LunaAssistantController {
         }
     }
 
-    fun submitTextFromOverlay(context: Context, text: String) {
+    /**
+     * Submits a text prompt from the main app's ChatsScreen without opening the floating side-notch overlay.
+     */
+    fun submitTextFromChat(context: Context, text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         val appContext = context.applicationContext
@@ -299,8 +312,6 @@ object LunaAssistantController {
             audioRecorder.stopRecording()
             LunaTtsEngine.getInstance(appContext).stopSpeaking()
             _liveState.value = _liveState.value.copy(
-                isVisible = true,
-                isExpanded = true,
                 userTranscript = clean,
                 assistantReply = "",
                 phase = AssistantOverlayPhase.THINKING,
@@ -312,6 +323,10 @@ object LunaAssistantController {
                 detectedLanguage = settings.appLanguage.resolveLanguageCode()
             )
         }
+    }
+
+    fun submitTextFromOverlay(context: Context, text: String) {
+        submitTextFromChat(context, text)
     }
 
     private suspend fun submitPromptInternal(
@@ -359,11 +374,22 @@ object LunaAssistantController {
         } catch (t: Throwable) {
             Log.e(TAG, "Agent turn failed: ${t.message}", t)
             val errReply = t.message ?: "Error communicating with OpenAI API."
+            chatDao.insertMessage(
+                ChatMessageEntity(
+                    sessionId = sessionId,
+                    role = "assistant",
+                    content = errReply
+                )
+            )
             _liveState.value = _liveState.value.copy(
-                phase = AssistantOverlayPhase.RESULT_CARD,
+                phase = AssistantOverlayPhase.IDLE_NOTCH,
                 assistantReply = errReply,
                 statusBadge = ""
             )
+            if (_liveState.value.isVisible) {
+                delay(800)
+                dismissOverlay(appContext)
+            }
             return
         }
 
@@ -382,15 +408,40 @@ object LunaAssistantController {
             model = result.modelUsed
         )
 
-        _liveState.value = _liveState.value.copy(
-            phase = if (settings.ttsEnabled) AssistantOverlayPhase.SPEAKING else AssistantOverlayPhase.RESULT_CARD,
-            assistantReply = result.replyText,
-            executedTools = result.executedToolsSummary,
-            statusBadge = ""
-        )
-
+        val ttsEngine = LunaTtsEngine.getInstance(appContext)
         if (settings.ttsEnabled) {
-            LunaTtsEngine.getInstance(appContext).speak(result.replyText, detectedLanguage)
+            _liveState.value = _liveState.value.copy(
+                phase = AssistantOverlayPhase.SPEAKING,
+                assistantReply = result.replyText,
+                executedTools = result.executedToolsSummary,
+                statusBadge = ""
+            )
+            ttsEngine.speak(result.replyText, detectedLanguage)
+            // Wait for TTS to start and finish speaking, then auto-hide the bubble
+            delay(350)
+            var waitedMs = 0L
+            while (ttsEngine.isSpeaking.value && waitedMs < 60_000L) {
+                delay(150)
+                waitedMs += 150L
+            }
+            _liveState.value = _liveState.value.copy(
+                phase = AssistantOverlayPhase.IDLE_NOTCH,
+                statusBadge = ""
+            )
+            if (_liveState.value.isVisible) {
+                dismissOverlay(appContext)
+            }
+        } else {
+            _liveState.value = _liveState.value.copy(
+                phase = AssistantOverlayPhase.IDLE_NOTCH,
+                assistantReply = result.replyText,
+                executedTools = result.executedToolsSummary,
+                statusBadge = ""
+            )
+            if (_liveState.value.isVisible) {
+                delay(500)
+                dismissOverlay(appContext)
+            }
         }
     }
 
