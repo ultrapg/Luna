@@ -395,7 +395,7 @@ object LunaSettingsRepository {
             autoSilenceStop = p.getBoolean("auto_silence_stop", true),
             silenceTimeoutMs = p.getLong("silence_timeout_ms", 3000L),
             sideButtonContinuationTimeoutSec = p.getInt("side_button_continuation_timeout_sec", 20).coerceIn(5, 180),
-            ttsEnabled = p.getBoolean("tts_enabled", true),
+            ttsEnabled = p.getBoolean("tts_enabled_v2", true),
             selectedTtsVoice = TtsVoiceModelId.fromId(
                 p.getString(
                     "selected_tts_voice",
@@ -465,7 +465,7 @@ object LunaSettingsRepository {
             .putBoolean("auto_silence_stop", s.autoSilenceStop)
             .putLong("silence_timeout_ms", s.silenceTimeoutMs)
             .putInt("side_button_continuation_timeout_sec", s.sideButtonContinuationTimeoutSec.coerceIn(5, 180))
-            .putBoolean("tts_enabled", s.ttsEnabled)
+            .putBoolean("tts_enabled_v2", s.ttsEnabled)
             .putString("selected_tts_voice", s.selectedTtsVoice.id)
             .putString("preferred_en_tts", s.preferredEnglishTts.id)
             .putString("preferred_de_tts", s.preferredGermanTts.id)

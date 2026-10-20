@@ -53,6 +53,7 @@ import com.ultrapg.luna.core.database.LunaDatabase
 import com.ultrapg.luna.core.llm.ToolExecutionCodec
 import com.ultrapg.luna.core.llm.ToolExecutionRecord
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
+import com.ultrapg.luna.core.speech.LunaTtsEngine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -795,6 +796,7 @@ private fun ChatMessageBubble(
         }
 
         // 3. Main Message Bubble
+        val context = LocalContext.current
         Surface(
             color = if (isUser) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -812,7 +814,14 @@ private fun ChatMessageBubble(
                 bottomStart = if (isUser) 20.dp else 6.dp,
                 bottomEnd = if (isUser) 6.dp else 20.dp
             ),
-            modifier = Modifier.widthIn(max = 335.dp)
+            modifier = Modifier
+                .widthIn(max = 335.dp)
+                .clickable(enabled = !isUser && msg.content.isNotBlank()) {
+                    LunaTtsEngine.getInstance(context).speak(
+                        text = msg.content,
+                        forceSpeak = true
+                    )
+                }
         ) {
             Text(
                 text = msg.content,

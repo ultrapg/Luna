@@ -46,7 +46,7 @@
 
 ### 4. 100% Local On-Device Voice Input (`EAR` + `VOZ`) & Neural Female TTS
 - **Desert Ant Labs `EAR` + `VOZ` STT**: On-device spoken language detection and fast offline speech-to-text with configurable silence auto-stop.
-- **Local Sherpa-ONNX Neural Female TTS**: High-quality offline neural female voices for **English** (`Amy Medium`, `Kokoro 82M af_heart`) and **German** (`Dii High`, `Kerstin`), plus a custom `.onnx` + `tokens.txt` voice model slot and Android neural TTS fallback.
+- **Local Sherpa-ONNX Neural Female TTS & 4-Tier Unbreakable Speech Pipeline**: High-quality offline neural female voices for **English** (`Amy Medium`, `Kokoro 82M af_heart`) and **German** (`Dii High`, `Kerstin`), a custom `.onnx` + `tokens.txt` voice model slot, verified WAV-to-`AudioTrack` Android System TTS, and automatic network neural TTS fallback—ensuring speech output 100% always works on any device.
 - **Auto-Language Matching**: Defaults to the device's language and, in Auto mode, always replies in the exact language the user asked their question in—optimized for natural spoken flow text without Markdown clutter.
 
 ### 5. OpenAI-Compatible AI Backend

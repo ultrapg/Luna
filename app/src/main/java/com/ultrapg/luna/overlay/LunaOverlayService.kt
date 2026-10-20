@@ -432,7 +432,8 @@ object LunaOverlayWindowManager {
 
 class LunaOverlayService : Service() {
     companion object {
-        private const val CHANNEL_ID = "luna_assistant_overlay_channel"
+        private const val LEGACY_CHANNEL_ID = "luna_assistant_overlay_channel"
+        private const val CHANNEL_ID = "luna_assistant_silent_min_v2"
         private const val NOTIFICATION_ID = 2002
 
         fun startOrTrigger(context: Context, startListening: Boolean = true) {
@@ -476,6 +477,11 @@ class LunaOverlayService : Service() {
                     LunaOverlayWindowManager.syncWindowPosition(this@LunaOverlayService)
                 } else {
                     LunaOverlayWindowManager.detachOverlay()
+                    val keepDock = LunaSettingsRepository.current(this@LunaOverlayService).bubbleKeepAliveDock
+                    if (!keepDock) {
+                        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                        stopSelf()
+                    }
                 }
             }
         }
@@ -509,8 +515,14 @@ class LunaOverlayService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Luna Service Active")
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setSilent(true)
+            .setShowWhen(false)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .setContentIntent(pendingIntent)
             .build()
 
@@ -529,12 +541,20 @@ class LunaOverlayService : Service() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Delete legacy IMPORTANCE_LOW channel so Android does not show the star icon in the status bar
+            runCatching { nm.deleteNotificationChannel(LEGACY_CHANNEL_ID) }
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Luna Digital Assistant",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
+            }
             nm.createNotificationChannel(channel)
         }
     }

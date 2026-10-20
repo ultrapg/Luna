@@ -92,6 +92,9 @@ object LunaAssistantController {
     @Volatile
     private var lastTurnActiveRealtimeMs: Long = 0L
 
+    @Volatile
+    private var lastListeningStartRealtimeMs: Long = 0L
+
     /**
      * Called when an Android action tool (`open_app`, `open_system_settings`, `set_alarm_or_timer`)
      * starts an external Activity so the bubble overlay stays visible across the activity transition
@@ -178,7 +181,12 @@ object LunaAssistantController {
         dismissAnimationJob = null
 
         val current = _liveState.value
+        val nowRealtime = SystemClock.elapsedRealtime()
         if (current.isVisible && !current.isDismissing && current.phase == AssistantOverlayPhase.LISTENING) {
+            // Ignore duplicate system triggers within 650ms of starting listening
+            if (nowRealtime - lastListeningStartRealtimeMs < 650L) {
+                return
+            }
             finishListeningAndProcess(appContext)
             return
         }
@@ -187,7 +195,6 @@ object LunaAssistantController {
         // If triggered again within `sideButtonContinuationTimeoutSec` (default 20s) after the
         // previous turn finished (or while still speaking/active), continue the same chat session!
         // If more than `sideButtonContinuationTimeoutSec` has elapsed, start a fresh new chat session.
-        val nowRealtime = SystemClock.elapsedRealtime()
         val continuationWindowMs = settings.sideButtonContinuationTimeoutSec.coerceIn(5, 180) * 1000L
         val wasRecentlyActive = lastTurnActiveRealtimeMs > 0L &&
             (nowRealtime - lastTurnActiveRealtimeMs) <= continuationWindowMs
@@ -356,6 +363,7 @@ object LunaAssistantController {
 
         LunaTtsEngine.getInstance(appContext).stopSpeaking()
         LunaSpeechPipeline.getInstance(appContext).warmUpAsync()
+        lastListeningStartRealtimeMs = SystemClock.elapsedRealtime()
 
         activeTurnJob?.cancel()
         activeTurnJob = scope.launch {
@@ -448,7 +456,8 @@ object LunaAssistantController {
             submitPromptInternal(
                 appContext = appContext,
                 promptText = sttResult.text,
-                detectedLanguage = sttResult.detectedLanguage
+                detectedLanguage = sttResult.detectedLanguage,
+                forceSpeak = true
             )
         }
     }
@@ -482,7 +491,8 @@ object LunaAssistantController {
             submitPromptInternal(
                 appContext = appContext,
                 promptText = clean,
-                detectedLanguage = promptLang
+                detectedLanguage = promptLang,
+                forceSpeak = _liveState.value.isVisible
             )
         }
     }
@@ -494,7 +504,8 @@ object LunaAssistantController {
     private suspend fun submitPromptInternal(
         appContext: Context,
         promptText: String,
-        detectedLanguage: String
+        detectedLanguage: String,
+        forceSpeak: Boolean = false
     ) {
         val db = LunaDatabase.getInstance(appContext)
         val chatDao = db.chatDao()
@@ -614,7 +625,8 @@ object LunaAssistantController {
         lastTurnActiveRealtimeMs = SystemClock.elapsedRealtime()
 
         val ttsEngine = LunaTtsEngine.getInstance(appContext)
-        if (settings.ttsEnabled) {
+        val shouldSpeak = forceSpeak || _liveState.value.isVisible || settings.ttsEnabled
+        if (shouldSpeak) {
             _liveState.value = _liveState.value.copy(
                 phase = AssistantOverlayPhase.SPEAKING,
                 assistantReply = result.replyText,
@@ -625,7 +637,11 @@ object LunaAssistantController {
             )
             // Suspend until the entire TTS synthesis & playback completes
             val replyLang = OpenAiAgentEngine.detectLanguageOfText(result.replyText, detectedLanguage)
-            ttsEngine.speakAndAwait(result.replyText, replyLang)
+            ttsEngine.speakAndAwait(
+                text = result.replyText,
+                languageCode = replyLang,
+                forceSpeak = true
+            )
             // Mark the end of speech as the start of the 20s continuation countdown
             lastTurnActiveRealtimeMs = SystemClock.elapsedRealtime()
             _liveState.value = _liveState.value.copy(
