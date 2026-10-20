@@ -11,11 +11,11 @@
 package com.ultrapg.luna.assistant
 
 import android.accessibilityservice.AccessibilityService
-import android.app.Activity
 import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +24,7 @@ import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 import android.speech.RecognitionService
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -31,6 +32,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
+import androidx.activity.ComponentActivity
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
@@ -38,6 +40,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.ultrapg.luna.R
 import com.ultrapg.luna.core.settings.BubbleEdge
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.speech.LunaTtsEngine
@@ -124,12 +127,13 @@ class LunaRecognitionService : RecognitionService() {
 }
 
 /**
- * Non-blocking `VoiceInteractionSession` that spawns Luna's Gemini-style pill/notch
+ * Non-blocking `VoiceInteractionSession` that spawns Luna's horizontal side-notch bubble
  * anchored directly next to the physical side button without dimming or blocking the screen.
  */
 class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(context) {
     private var pillContainerView: View? = null
     private var lifecycleOwner: ComposeOverlayLifecycleOwner? = null
+    private var horizontalDragAccumPx: Float = 0f
 
     override fun onCreate() {
         super.onCreate()
@@ -149,13 +153,10 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
     }
 
     override fun onCreateContentView(): View {
-        val root = FrameLayout(context).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        }
+        // Use the Dialog Window's visual Context wrapped with Theme.Luna so ComposeView
+        // has a valid Display & WindowManager on Android 14/15 (`targetSdk = 35`)
+        val winContext = window?.window?.context ?: context
+        val themedContext = ContextThemeWrapper(winContext, R.style.Theme_Luna)
 
         val owner = ComposeOverlayLifecycleOwner().apply {
             performRestore(null)
@@ -165,10 +166,23 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
         }
         lifecycleOwner = owner
 
-        val settings = LunaSettingsRepository.current(context)
-        val screenHeight = context.resources.displayMetrics.heightPixels
+        val root = FrameLayout(themedContext).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setViewTreeLifecycleOwner(owner)
+            setViewTreeViewModelStoreOwner(owner)
+            setViewTreeSavedStateRegistryOwner(owner)
+        }
 
-        val composePill = ComposeView(context).apply {
+        val settings = LunaSettingsRepository.current(themedContext)
+        val metrics = themedContext.resources.displayMetrics
+        val screenHeight = metrics.heightPixels.coerceAtLeast(1)
+        val density = metrics.density.coerceAtLeast(1f)
+
+        val composePill = ComposeView(themedContext).apply {
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
@@ -191,7 +205,7 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
                 val curSettings by LunaSettingsRepository.settingsFlow.collectAsState()
                 val micRms by LunaAssistantController.audioRecorder.rmsLevel.collectAsState()
                 val waveBands by LunaAssistantController.audioRecorder.waveBands.collectAsState()
-                val ttsEngine = LunaTtsEngine.getInstance(context)
+                val ttsEngine = LunaTtsEngine.getInstance(themedContext.applicationContext)
                 val ttsRms by ttsEngine.outputRms.collectAsState()
                 val isSpeaking by ttsEngine.isSpeaking.collectAsState()
 
@@ -203,17 +217,34 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
                         waveBands = waveBands,
                         ttsRms = ttsRms,
                         isSpeaking = isSpeaking,
-                        onDragDelta = { _, dy ->
-                            val newFrac = (curSettings.bubbleVerticalFraction + dy / screenHeight).coerceIn(0.05f, 0.88f)
-                            LunaSettingsRepository.update(context) { it.copy(bubbleVerticalFraction = newFrac) }
+                        onDragDelta = { dx, dy ->
+                            horizontalDragAccumPx += dx
+                            val snapThreshold = 56f * density
+                            var newEdge = curSettings.bubbleEdge
+                            if (curSettings.bubbleEdge == BubbleEdge.RIGHT && horizontalDragAccumPx < -snapThreshold) {
+                                newEdge = BubbleEdge.LEFT
+                                horizontalDragAccumPx = 0f
+                            } else if (curSettings.bubbleEdge == BubbleEdge.LEFT && horizontalDragAccumPx > snapThreshold) {
+                                newEdge = BubbleEdge.RIGHT
+                                horizontalDragAccumPx = 0f
+                            }
+                            val newFrac = (curSettings.bubbleVerticalFraction + dy / screenHeight).coerceIn(0.04f, 0.90f)
+                            LunaSettingsRepository.update(themedContext) {
+                                it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
+                            }
                             (layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                                lp.gravity = when (newEdge) {
+                                    BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
+                                    BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
+                                    BubbleEdge.FREE -> Gravity.END or Gravity.TOP
+                                }
                                 lp.topMargin = (screenHeight * newFrac).toInt()
                                 layoutParams = lp
                             }
                         },
                         onToggleExpand = {},
                         onDismiss = {
-                            LunaAssistantController.dismissOverlay(context)
+                            LunaAssistantController.dismissOverlay(themedContext)
                             hide()
                         }
                     )
@@ -248,8 +279,6 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        // If global system overlay is available, delegate to unified overlay window manager
-        // so the pill persists smoothly even after VoiceInteractionSession closes
         if (LunaOverlayWindowManager.canShowSystemOverlay(context)) {
             LunaOverlayService.startOrTrigger(context, startListening = true)
             hide()
@@ -266,21 +295,121 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
 }
 
 /**
- * Fallback Assist Trampoline Activity for `android.intent.action.ASSIST` and `ACTION_VOICE_COMMAND`.
- * Immediately triggers the floating side-button pill overlay and finishes with zero animation
- * so the underlying app stays in focus.
+ * Assist Activity for `android.intent.action.ASSIST` and `ACTION_VOICE_COMMAND`.
+ * - If system overlay permission (`canDrawOverlays` or `LunaAccessibilityService`) is active,
+ *   attaches the floating side-notch overlay and finishes immediately with zero animation.
+ * - If overlay permission is NOT yet granted, renders the non-touch-modal horizontal side-notch
+ *   directly in its own transparent window anchored to the side edge so the side button always works!
  */
-class AssistTrampolineActivity : Activity() {
+class AssistTrampolineActivity : ComponentActivity() {
+    private var horizontalDragAccumPx: Float = 0f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
 
-        LunaOverlayService.startOrTrigger(applicationContext, startListening = true)
+        if (LunaOverlayWindowManager.canShowSystemOverlay(this)) {
+            LunaOverlayService.startOrTrigger(this, startListening = true)
+            finish()
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+            return
+        }
 
-        finish()
-        @Suppress("DEPRECATION")
-        overridePendingTransition(0, 0)
+        // Fallback when SYSTEM_ALERT_WINDOW is not granted yet:
+        // Configure this Activity's window as a non-touch-modal side-edge notch window
+        val settings = LunaSettingsRepository.current(this)
+        val metrics = resources.displayMetrics
+        val screenHeight = metrics.heightPixels.coerceAtLeast(1)
+        val density = metrics.density.coerceAtLeast(1f)
+
+        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        window.attributes = window.attributes.apply {
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            format = PixelFormat.TRANSLUCENT
+            gravity = when (settings.bubbleEdge) {
+                BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
+                BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
+                BubbleEdge.FREE -> Gravity.END or Gravity.TOP
+            }
+            x = 0
+            y = (screenHeight * settings.bubbleVerticalFraction).toInt()
+            flags = (flags
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN) and
+                WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
+            dimAmount = 0f
+        }
+
+        val composeView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@AssistTrampolineActivity)
+            setViewTreeViewModelStoreOwner(this@AssistTrampolineActivity)
+            setViewTreeSavedStateRegistryOwner(this@AssistTrampolineActivity)
+            setContent {
+                val liveState by LunaAssistantController.liveState.collectAsState()
+                val curSettings by LunaSettingsRepository.settingsFlow.collectAsState()
+                val micRms by LunaAssistantController.audioRecorder.rmsLevel.collectAsState()
+                val waveBands by LunaAssistantController.audioRecorder.waveBands.collectAsState()
+                val ttsEngine = LunaTtsEngine.getInstance(applicationContext)
+                val ttsRms by ttsEngine.outputRms.collectAsState()
+                val isSpeaking by ttsEngine.isSpeaking.collectAsState()
+
+                GeminiSidePillOverlay(
+                    liveState = liveState.copy(isVisible = true, isExpanded = true),
+                    settings = curSettings,
+                    micRms = micRms,
+                    waveBands = waveBands,
+                    ttsRms = ttsRms,
+                    isSpeaking = isSpeaking,
+                    onDragDelta = { dx, dy ->
+                        horizontalDragAccumPx += dx
+                        val snapThreshold = 56f * density
+                        var newEdge = curSettings.bubbleEdge
+                        if (curSettings.bubbleEdge == BubbleEdge.RIGHT && horizontalDragAccumPx < -snapThreshold) {
+                            newEdge = BubbleEdge.LEFT
+                            horizontalDragAccumPx = 0f
+                        } else if (curSettings.bubbleEdge == BubbleEdge.LEFT && horizontalDragAccumPx > snapThreshold) {
+                            newEdge = BubbleEdge.RIGHT
+                            horizontalDragAccumPx = 0f
+                        }
+                        val newFrac = (curSettings.bubbleVerticalFraction + dy / screenHeight).coerceIn(0.04f, 0.90f)
+                        LunaSettingsRepository.update(this@AssistTrampolineActivity) {
+                            it.copy(bubbleEdge = newEdge, bubbleVerticalFraction = newFrac)
+                        }
+                        window.attributes = window.attributes.apply {
+                            gravity = when (newEdge) {
+                                BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
+                                BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
+                                BubbleEdge.FREE -> Gravity.END or Gravity.TOP
+                            }
+                            y = (screenHeight * newFrac).toInt()
+                        }
+                    },
+                    onToggleExpand = {},
+                    onDismiss = {
+                        LunaAssistantController.dismissOverlay(this@AssistTrampolineActivity)
+                        finish()
+                        @Suppress("DEPRECATION")
+                        overridePendingTransition(0, 0)
+                    }
+                )
+            }
+        }
+
+        setContentView(composeView)
+        LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (LunaOverlayWindowManager.canShowSystemOverlay(this)) {
+            LunaOverlayService.startOrTrigger(this, startListening = true)
+            finish()
+        } else {
+            LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
+        }
     }
 }
 

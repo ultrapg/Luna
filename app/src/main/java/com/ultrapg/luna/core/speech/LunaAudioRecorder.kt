@@ -30,13 +30,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
  * Captures 16 kHz mono 16-bit PCM audio on-device for Desert Ant Labs `Ear` & `Voz`
- * and computes real-time RMS + 5-band audio spectrum amplitudes to drive the Gemini-style
- * glowing wave & pill animation. Also supports automatic end-of-utterance VAD detection.
+ * and computes real-time RMS + 5-band audio spectrum amplitudes to drive the horizontal
+ * side-notch pill equalizer.
+ *
+ * Includes adaptive VAD end-of-utterance detection: once the user speaks and then stays
+ * silent for `silenceTimeoutMs` (default 3000 ms / 3 seconds), it automatically triggers
+ * transcription and assistant execution just like Gemini.
  */
 class LunaAudioRecorder {
     companion object {
@@ -44,7 +49,7 @@ class LunaAudioRecorder {
         const val SAMPLE_RATE = 16000
         private const val INITIAL_CAPACITY_SAMPLES = SAMPLE_RATE * 15
         private const val MAX_RECORDING_SAMPLES = SAMPLE_RATE * 240 // 4 minutes max
-        private const val SPEECH_RMS_THRESHOLD = 0.048f
+        private const val MIN_SPEECH_RMS_THRESHOLD = 0.095f
     }
 
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
@@ -74,7 +79,7 @@ class LunaAudioRecorder {
     suspend fun startRecording(
         scope: CoroutineScope,
         autoStopOnSilence: Boolean = true,
-        silenceTimeoutMs: Long = 1600L,
+        silenceTimeoutMs: Long = 3000L,
         onAutoSilenceDetected: (() -> Unit)? = null
     ): Boolean = controllerMutex.withLock {
         stopInternalLocked()
@@ -128,11 +133,13 @@ class LunaAudioRecorder {
 
         _isRecording.value = true
         val startMs = SystemClock.elapsedRealtime()
+        val effectiveSilenceTimeout = silenceTimeoutMs.coerceIn(1500L, 6000L)
 
         recordingJob = scope.launch(Dispatchers.IO) {
             val shortBuffer = ShortArray(1024)
             var hasHeardSpeech = false
             var lastSpeechMs = SystemClock.elapsedRealtime()
+            var noiseFloor = 0.03f
 
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val readCount = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
@@ -163,22 +170,33 @@ class LunaAudioRecorder {
                     }
 
                     val rawRms = sqrt(sumSquares / readCount).toFloat()
-                    val scaledRms = (rawRms * 5.4f).coerceIn(0f, 1f)
+                    val scaledRms = (rawRms * 5.2f).coerceIn(0f, 1f)
                     _rmsLevel.value = _rmsLevel.value * 0.35f + scaledRms * 0.65f
 
                     val prevBands = _waveBands.value
                     val nextBands = FloatArray(5) { idx ->
-                        val avg = (bandAccum[idx] / bandBucketSize) * 6.8f
-                        (prevBands[idx] * 0.3f + avg * 0.7f).coerceIn(0.08f, 1.0f)
+                        val avg = (bandAccum[idx] / bandBucketSize) * 6.5f
+                        (prevBands[idx] * 0.3f + avg * 0.7f).coerceIn(0.06f, 1.0f)
                     }
                     _waveBands.value = nextBands
 
+                    // Adaptive noise floor tracking during quiet frames
+                    if (scaledRms < noiseFloor * 1.5f) {
+                        noiseFloor = (noiseFloor * 0.92f + scaledRms * 0.08f).coerceIn(0.015f, 0.12f)
+                    }
+                    val dynamicThreshold = max(MIN_SPEECH_RMS_THRESHOLD, noiseFloor * 2.2f)
+
                     val now = SystemClock.elapsedRealtime()
-                    if (scaledRms >= SPEECH_RMS_THRESHOLD) {
+                    if (scaledRms >= dynamicThreshold) {
                         hasHeardSpeech = true
                         lastSpeechMs = now
-                    } else if (autoStopOnSilence && hasHeardSpeech && (now - startMs > 1200L)) {
-                        if (now - lastSpeechMs >= silenceTimeoutMs) {
+                    } else if (autoStopOnSilence && (now - startMs > 1000L)) {
+                        val silenceElapsed = now - lastSpeechMs
+                        // Trigger auto-send after 3s of silence once speech was heard
+                        // (or after 4.5s if the user spoke very softly)
+                        if ((hasHeardSpeech && silenceElapsed >= effectiveSilenceTimeout) ||
+                            (!hasHeardSpeech && silenceElapsed >= effectiveSilenceTimeout + 1500L)
+                        ) {
                             onAutoSilenceDetected?.invoke()
                             break
                         }
@@ -219,7 +237,7 @@ class LunaAudioRecorder {
         releaseHardware()
         _isRecording.value = false
         _rmsLevel.value = 0f
-        _waveBands.value = floatArrayOf(0.08f, 0.08f, 0.08f, 0.08f, 0.08f)
+        _waveBands.value = floatArrayOf(0.06f, 0.06f, 0.06f, 0.06f, 0.06f)
     }
 
     private fun releaseHardware() {

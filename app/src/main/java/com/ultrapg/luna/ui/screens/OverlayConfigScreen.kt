@@ -29,6 +29,7 @@ import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.overlay.GeminiSidePillOverlay
 import com.ultrapg.luna.overlay.LunaOverlayService
 import com.ultrapg.luna.overlay.LunaOverlayWindowManager
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,7 +43,8 @@ fun OverlayConfigScreen(
     val isGerman = settings.appLanguage.isGerman
 
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    var previewExpanded by remember { mutableStateOf(true) }
+    // 0 = Listening, 1 = Researching/Speaking, 2 = Idle Notch
+    var previewMode by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         canDrawOverlays = Settings.canDrawOverlays(context)
@@ -55,7 +57,7 @@ fun OverlayConfigScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Clean Pill Preview Box
+        // 1. Horizontal Side-Notch Preview Box
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
             shape = RoundedCornerShape(20.dp),
@@ -65,61 +67,71 @@ fun OverlayConfigScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (isGerman) "Pill-Vorschau" else "Pill Preview",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                Text(
+                    text = if (isGerman) "Seiten-Notch Vorschau" else "Side-Notch Preview",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
 
-                    SingleChoiceSegmentedButtonRow {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    val labels = if (isGerman) {
+                        listOf("Hören", "Recherche", "Notch")
+                    } else {
+                        listOf("Listen", "Research", "Notch")
+                    }
+                    labels.forEachIndexed { idx, label ->
                         SegmentedButton(
-                            selected = previewExpanded,
-                            onClick = { previewExpanded = true },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                            selected = previewMode == idx,
+                            onClick = { previewMode = idx },
+                            shape = SegmentedButtonDefaults.itemShape(index = idx, count = labels.size)
                         ) {
-                            Text(if (isGerman) "Aktiv" else "Active", maxLines = 1)
-                        }
-                        SegmentedButton(
-                            selected = !previewExpanded,
-                            onClick = { previewExpanded = false },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
-                        ) {
-                            Text(if (isGerman) "Notch" else "Notch", maxLines = 1)
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
+                }
+
+                val previewAlignment = when (settings.bubbleEdge) {
+                    BubbleEdge.RIGHT -> Alignment.CenterEnd
+                    BubbleEdge.LEFT -> Alignment.CenterStart
+                    BubbleEdge.FREE -> Alignment.Center
                 }
 
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
+                        .height(165.dp)
                         .clip(RoundedCornerShape(18.dp))
                         .background(Color(0xFF090B10))
                         .border(1.dp, Color(0xFF222634), RoundedCornerShape(18.dp))
                         .pointerInput(Unit) {
                             detectDragGestures { change, dragAmount ->
                                 change.consume()
-                                val newFraction = (settings.bubbleVerticalFraction + (dragAmount.y / size.height))
-                                    .coerceIn(0.05f, 0.90f)
-                                LunaSettingsRepository.update(context) {
-                                    it.copy(bubbleVerticalFraction = newFraction)
-                                }
-                                LunaOverlayWindowManager.syncWindowPosition(context)
+                                LunaOverlayWindowManager.handleDragDelta(context, dragAmount.x, dragAmount.y)
                             }
                         },
-                    contentAlignment = Alignment.Center
+                    contentAlignment = previewAlignment
                 ) {
-                    val previewState = remember(previewExpanded) {
-                        AssistantLiveState(
-                            isVisible = true,
-                            isExpanded = previewExpanded,
-                            phase = if (previewExpanded) AssistantOverlayPhase.LISTENING else AssistantOverlayPhase.IDLE_NOTCH
-                        )
+                    val previewState = remember(previewMode, isGerman) {
+                        when (previewMode) {
+                            0 -> AssistantLiveState(
+                                isVisible = true,
+                                isExpanded = true,
+                                phase = AssistantOverlayPhase.LISTENING
+                            )
+                            1 -> AssistantLiveState(
+                                isVisible = true,
+                                isExpanded = true,
+                                phase = AssistantOverlayPhase.THINKING,
+                                userTranscript = if (isGerman) "Wie wird das Wetter heute?" else "What's the weather today?",
+                                statusBadge = if (isGerman) "Suche auf DuckDuckGo..." else "Searching DuckDuckGo...",
+                                assistantReply = if (isGerman) "Heute sind es 21°C und sonnig." else "It is 21°C and sunny today."
+                            )
+                            else -> AssistantLiveState(
+                                isVisible = true,
+                                isExpanded = false,
+                                phase = AssistantOverlayPhase.IDLE_NOTCH
+                            )
+                        }
                     }
 
                     GeminiSidePillOverlay(
@@ -127,17 +139,21 @@ fun OverlayConfigScreen(
                         settings = settings,
                         micRms = 0.52f,
                         waveBands = floatArrayOf(0.35f, 0.65f, 0.88f, 0.60f, 0.40f),
-                        ttsRms = 0f,
-                        isSpeaking = false,
-                        onDragDelta = { _, _ -> },
-                        onToggleExpand = { previewExpanded = !previewExpanded },
-                        onDismiss = { previewExpanded = false }
+                        ttsRms = 0.48f,
+                        isSpeaking = previewMode == 1,
+                        onDragDelta = { dx, dy ->
+                            LunaOverlayWindowManager.handleDragDelta(context, dx, dy)
+                        },
+                        onToggleExpand = {
+                            previewMode = (previewMode + 1) % 3
+                        },
+                        onDismiss = { previewMode = 2 }
                     )
                 }
             }
         }
 
-        // 2. Clean Full-Width Setup Actions (No wrapping buttons!)
+        // 2. Clean Full-Width Setup Actions
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
             shape = RoundedCornerShape(20.dp),
@@ -183,7 +199,7 @@ fun OverlayConfigScreen(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (canDrawOverlays) {
-                            if (isGerman) "Pill jetzt auf Bildschirm starten" else "Launch Pill Now"
+                            if (isGerman) "Seiten-Notch jetzt starten" else "Launch Side-Notch Now"
                         } else {
                             if (isGerman) "Overlay-Berechtigung erteilen" else "Grant Overlay Permission"
                         },
@@ -208,7 +224,7 @@ fun OverlayConfigScreen(
             }
         }
 
-        // 3. Position & Size Controls
+        // 3. Position, Size & 3s Auto-Send Controls
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
             shape = RoundedCornerShape(20.dp),
@@ -219,12 +235,12 @@ fun OverlayConfigScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = if (isGerman) "Position & Größe" else "Position & Size",
+                    text = if (isGerman) "Position, Größe & Auto-Senden" else "Position, Size & Auto-Send",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
 
-                // Edge Segmented Row (Guaranteed 1 line)
+                // Edge Segmented Row
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     BubbleEdge.entries.forEachIndexed { idx, edge ->
                         SegmentedButton(
@@ -251,7 +267,7 @@ fun OverlayConfigScreen(
                 }
 
                 SliderSettingRow(
-                    label = if (isGerman) "Vertikale Position" else "Vertical Position",
+                    label = if (isGerman) "Höhe am Bildschirmrand (Power-Taste)" else "Edge Height (Power Button)",
                     valueText = "${(settings.bubbleVerticalFraction * 100).roundToInt()}%",
                     value = settings.bubbleVerticalFraction,
                     valueRange = 0.05f..0.90f,
@@ -262,20 +278,31 @@ fun OverlayConfigScreen(
                 )
 
                 SliderSettingRow(
-                    label = if (isGerman) "Pill-Breite" else "Pill Width",
+                    label = if (isGerman) "Auto-Senden nach Stille" else "Auto-Send After Silence",
+                    valueText = String.format(Locale.US, "%.1f s", settings.silenceTimeoutMs / 1000f),
+                    value = (settings.silenceTimeoutMs / 1000f).coerceIn(1.5f, 5.0f),
+                    valueRange = 1.5f..5.0f,
+                    onValueChange = { sec ->
+                        val ms = ((sec * 10f).roundToInt() * 100L).coerceIn(1500L, 5000L)
+                        LunaSettingsRepository.update(context) { it.copy(silenceTimeoutMs = ms) }
+                    }
+                )
+
+                SliderSettingRow(
+                    label = if (isGerman) "Notch-Breite (Hören)" else "Notch Width (Listening)",
                     valueText = "${settings.bubbleExpandedWidthDp} dp",
-                    value = settings.bubbleExpandedWidthDp.toFloat(),
-                    valueRange = 140f..300f,
+                    value = settings.bubbleExpandedWidthDp.toFloat().coerceIn(120f, 280f),
+                    valueRange = 120f..280f,
                     onValueChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(bubbleExpandedWidthDp = v.roundToInt()) }
                     }
                 )
 
                 SliderSettingRow(
-                    label = if (isGerman) "Pill-Höhe" else "Pill Height",
+                    label = if (isGerman) "Notch-Höhe" else "Notch Height",
                     valueText = "${settings.bubbleExpandedHeightDp} dp",
-                    value = settings.bubbleExpandedHeightDp.toFloat(),
-                    valueRange = 44f..84f,
+                    value = settings.bubbleExpandedHeightDp.toFloat().coerceIn(34f, 68f),
+                    valueRange = 34f..68f,
                     onValueChange = { v ->
                         LunaSettingsRepository.update(context) { it.copy(bubbleExpandedHeightDp = v.roundToInt()) }
                     }
@@ -315,11 +342,12 @@ fun OverlayConfigScreen(
                             it.copy(
                                 bubbleEdge = BubbleEdge.RIGHT,
                                 bubbleVerticalFraction = 0.28f,
-                                bubbleWidthDp = 36,
-                                bubbleHeightDp = 96,
-                                bubbleExpandedWidthDp = 220,
-                                bubbleExpandedHeightDp = 56,
-                                bubbleScale = 1.0f
+                                bubbleWidthDp = 68,
+                                bubbleHeightDp = 38,
+                                bubbleExpandedWidthDp = 164,
+                                bubbleExpandedHeightDp = 46,
+                                bubbleScale = 1.0f,
+                                silenceTimeoutMs = 3000L
                             )
                         }
                         LunaOverlayWindowManager.syncWindowPosition(context)

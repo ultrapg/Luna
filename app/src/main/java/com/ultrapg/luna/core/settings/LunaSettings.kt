@@ -205,7 +205,7 @@ data class LunaSettings(
     // Desert Ant Labs STT Settings (Ear + Voz)
     val earEnabled: Boolean = true,
     val autoSilenceStop: Boolean = true,
-    val silenceTimeoutMs: Long = 1600L,
+    val silenceTimeoutMs: Long = 3000L,
 
     // Fast Local Female TTS Settings
     val ttsEnabled: Boolean = true,
@@ -219,14 +219,14 @@ data class LunaSettings(
     val customTtsTokensPath: String = "",
     val customTtsDataDirPath: String = "",
 
-    // Gemini-Style Side-Button Notch/Pill Bubble Settings
+    // Gemini-Style Side-Button Horizontal Notch Bubble Settings
     val bubbleEdge: BubbleEdge = BubbleEdge.RIGHT,
     val bubbleVerticalFraction: Float = 0.28f, // 28% from top right next to physical power/side button
     val bubbleOffsetXDp: Int = 0,
-    val bubbleWidthDp: Int = 36,
-    val bubbleHeightDp: Int = 96,
-    val bubbleExpandedWidthDp: Int = 220,
-    val bubbleExpandedHeightDp: Int = 56,
+    val bubbleWidthDp: Int = 68,
+    val bubbleHeightDp: Int = 38,
+    val bubbleExpandedWidthDp: Int = 164,
+    val bubbleExpandedHeightDp: Int = 46,
     val bubbleScale: Float = 1.0f,
     val bubbleGlowIntensity: Float = 0.92f,
     val bubbleKeepAliveDock: Boolean = false,
@@ -327,7 +327,7 @@ object LunaSettingsRepository {
             customSystemPrompt = p.getString("custom_system_prompt", "") ?: "",
             earEnabled = p.getBoolean("ear_enabled", true),
             autoSilenceStop = p.getBoolean("auto_silence_stop", true),
-            silenceTimeoutMs = p.getLong("silence_timeout_ms", 1600L),
+            silenceTimeoutMs = p.getLong("silence_timeout_ms", 3000L),
             ttsEnabled = p.getBoolean("tts_enabled", true),
             preferredEnglishTts = TtsVoiceModelId.fromId(p.getString("preferred_en_tts", TtsVoiceModelId.PIPER_EN_AMY.id)),
             preferredGermanTts = TtsVoiceModelId.fromId(p.getString("preferred_de_tts", TtsVoiceModelId.PIPER_DE_DII.id)),
@@ -341,10 +341,10 @@ object LunaSettingsRepository {
             bubbleEdge = BubbleEdge.fromId(p.getString("bubble_edge", BubbleEdge.RIGHT.id)),
             bubbleVerticalFraction = p.getFloat("bubble_vertical_fraction", 0.28f).coerceIn(0.05f, 0.90f),
             bubbleOffsetXDp = p.getInt("bubble_offset_x_dp", 0),
-            bubbleWidthDp = p.getInt("bubble_width_dp", 36).coerceIn(28, 72),
-            bubbleHeightDp = p.getInt("bubble_height_dp", 96).coerceIn(64, 160),
-            bubbleExpandedWidthDp = p.getInt("bubble_expanded_width_dp", 220).coerceIn(140, 300),
-            bubbleExpandedHeightDp = p.getInt("bubble_expanded_height_dp", 56).coerceIn(44, 84),
+            bubbleWidthDp = p.getInt("bubble_width_dp", 68).coerceIn(44, 140),
+            bubbleHeightDp = p.getInt("bubble_height_dp", 38).coerceIn(28, 80),
+            bubbleExpandedWidthDp = p.getInt("bubble_expanded_width_dp", 164).coerceIn(120, 280),
+            bubbleExpandedHeightDp = p.getInt("bubble_expanded_height_dp", 46).coerceIn(36, 84),
             bubbleScale = p.getFloat("bubble_scale", 1.0f).coerceIn(0.6f, 1.8f),
             bubbleGlowIntensity = p.getFloat("bubble_glow_intensity", 0.92f).coerceIn(0.2f, 1.0f),
             bubbleKeepAliveDock = p.getBoolean("bubble_keep_alive_dock", false),

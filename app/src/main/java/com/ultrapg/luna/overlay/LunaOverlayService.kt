@@ -19,12 +19,18 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
+import android.view.ContextThemeWrapper
+import android.view.Display
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
@@ -72,23 +78,43 @@ class ComposeOverlayLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, SavedS
 }
 
 /**
- * Manages the floating Gemini-style Pill/Notch overlay window across the system.
- * Automatically uses `TYPE_ACCESSIBILITY_OVERLAY` (if LunaAccessibilityService is active)
- * or `TYPE_APPLICATION_OVERLAY` (if `Settings.canDrawOverlays` is granted).
+ * Manages the floating horizontal Side-Notch overlay window across the system.
+ * Uses a proper Android 11+ visual `WindowContext` + `ContextThemeWrapper` so `ComposeView`
+ * and `WindowManager` never crash with `IllegalArgumentException` on Android 14/15 (`targetSdk = 35`).
  */
 object LunaOverlayWindowManager {
-    private var composeView: ComposeView? = null
+    private const val TAG = "LunaOverlayWM"
+
+    private var rootView: View? = null
     private var windowManager: WindowManager? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var lifecycleOwner: ComposeOverlayLifecycleOwner? = null
+    private var horizontalDragAccumPx: Float = 0f
 
     fun canShowSystemOverlay(context: Context): Boolean {
         return LunaAccessibilityService.activeInstance != null || Settings.canDrawOverlays(context)
     }
 
+    private fun createVisualWindowContext(baseContext: Context, windowType: Int): Context {
+        val rawVisualContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                val dm = baseContext.getSystemService(DisplayManager::class.java)
+                val display = dm?.getDisplay(Display.DEFAULT_DISPLAY)
+                if (display != null) {
+                    baseContext.createDisplayContext(display).createWindowContext(windowType, null)
+                } else {
+                    baseContext
+                }
+            }.getOrDefault(baseContext)
+        } else {
+            baseContext
+        }
+        return ContextThemeWrapper(rawVisualContext, R.style.Theme_Luna)
+    }
+
     @Synchronized
     fun ensureOverlayAttached(context: Context) {
-        if (composeView != null) {
+        if (rootView != null) {
             syncWindowPosition(context)
             return
         }
@@ -96,17 +122,23 @@ object LunaOverlayWindowManager {
         val hasOverlayPerm = Settings.canDrawOverlays(context)
         if (a11yContext == null && !hasOverlayPerm) return
 
-        val hostContext: Context = a11yContext ?: context.applicationContext
-        val wm = hostContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val settings = LunaSettingsRepository.current(hostContext)
-        val screenHeight = hostContext.resources.displayMetrics.heightPixels
-        val density = hostContext.resources.displayMetrics.density
-
         val windowType = if (a11yContext != null) {
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
         } else {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         }
+
+        val baseContext: Context = a11yContext ?: context.applicationContext
+        val visualContext = if (a11yContext != null) {
+            ContextThemeWrapper(a11yContext, R.style.Theme_Luna)
+        } else {
+            createVisualWindowContext(baseContext, windowType)
+        }
+
+        val wm = visualContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+        val settings = LunaSettingsRepository.current(visualContext)
+        val screenHeight = visualContext.resources.displayMetrics.heightPixels
+        val density = visualContext.resources.displayMetrics.density
 
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -122,7 +154,11 @@ object LunaOverlayWindowManager {
                 BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
                 BubbleEdge.FREE -> Gravity.START or Gravity.TOP
             }
-            x = (settings.bubbleOffsetXDp * density).toInt()
+            x = if (settings.bubbleEdge == BubbleEdge.FREE) {
+                (settings.bubbleOffsetXDp * density).toInt()
+            } else {
+                0
+            }
             y = (screenHeight * settings.bubbleVerticalFraction).toInt()
         }
 
@@ -133,7 +169,13 @@ object LunaOverlayWindowManager {
             handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         }
 
-        val view = ComposeView(hostContext).apply {
+        val container = FrameLayout(visualContext).apply {
+            setViewTreeLifecycleOwner(owner)
+            setViewTreeViewModelStoreOwner(owner)
+            setViewTreeSavedStateRegistryOwner(owner)
+        }
+
+        val compose = ComposeView(visualContext).apply {
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
@@ -142,7 +184,7 @@ object LunaOverlayWindowManager {
                 val curSettings by LunaSettingsRepository.settingsFlow.collectAsState()
                 val micRms by LunaAssistantController.audioRecorder.rmsLevel.collectAsState()
                 val waveBands by LunaAssistantController.audioRecorder.waveBands.collectAsState()
-                val ttsEngine = LunaTtsEngine.getInstance(hostContext)
+                val ttsEngine = LunaTtsEngine.getInstance(visualContext.applicationContext)
                 val ttsRms by ttsEngine.outputRms.collectAsState()
                 val isSpeaking by ttsEngine.isSpeaking.collectAsState()
 
@@ -155,33 +197,37 @@ object LunaOverlayWindowManager {
                         ttsRms = ttsRms,
                         isSpeaking = isSpeaking,
                         onDragDelta = { dx, dy ->
-                            handleDragDelta(hostContext, dx, dy)
+                            handleDragDelta(visualContext, dx, dy)
                         },
                         onToggleExpand = {},
                         onDismiss = {
-                            LunaAssistantController.dismissOverlay(hostContext)
+                            LunaAssistantController.dismissOverlay(visualContext)
                         }
                     )
                 }
             }
         }
 
+        container.addView(compose)
+
         runCatching {
-            wm.addView(view, lp)
+            wm.addView(container, lp)
             windowManager = wm
             layoutParams = lp
-            composeView = view
+            rootView = container
             lifecycleOwner = owner
+        }.onFailure { e ->
+            Log.e(TAG, "Failed to attach overlay window: ${e.message}", e)
+            owner.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         }
     }
 
     @Synchronized
     fun syncWindowPosition(context: Context) {
-        val view = composeView ?: return
+        val view = rootView ?: return
         val wm = windowManager ?: return
         val lp = layoutParams ?: return
         val settings = LunaSettingsRepository.current(context)
-        val liveState = LunaAssistantController.liveState.value
         val screenHeight = context.resources.displayMetrics.heightPixels
         val density = context.resources.displayMetrics.density
 
@@ -204,17 +250,49 @@ object LunaOverlayWindowManager {
         runCatching { wm.updateViewLayout(view, lp) }
     }
 
-    private fun handleDragDelta(context: Context, dxPx: Float, dyPx: Float) {
-        val screenHeight = context.resources.displayMetrics.heightPixels.coerceAtLeast(1)
-        val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
+    fun handleDragDelta(context: Context, dxPx: Float, dyPx: Float) {
+        val metrics = context.resources.displayMetrics
+        val screenHeight = metrics.heightPixels.coerceAtLeast(1)
+        val screenWidth = metrics.widthPixels.coerceAtLeast(1)
+        val density = metrics.density.coerceAtLeast(1f)
+        val screenWidthDp = (screenWidth / density).toInt().coerceAtLeast(240)
+
+        horizontalDragAccumPx += dxPx
+        val snapThresholdPx = 56f * density
+
         LunaSettingsRepository.update(context) { cur ->
-            val newYFrac = (cur.bubbleVerticalFraction + (dyPx / screenHeight)).coerceIn(0.05f, 0.88f)
-            val newXDp = if (cur.bubbleEdge == BubbleEdge.FREE) {
-                (cur.bubbleOffsetXDp + (dxPx / density).toInt()).coerceIn(0, 360)
-            } else {
-                cur.bubbleOffsetXDp
+            val newYFrac = (cur.bubbleVerticalFraction + (dyPx / screenHeight)).coerceIn(0.04f, 0.90f)
+            var newEdge = cur.bubbleEdge
+            var newXDp = cur.bubbleOffsetXDp
+
+            when (cur.bubbleEdge) {
+                BubbleEdge.RIGHT -> {
+                    if (horizontalDragAccumPx < -snapThresholdPx) {
+                        newEdge = BubbleEdge.LEFT
+                        horizontalDragAccumPx = 0f
+                    }
+                }
+                BubbleEdge.LEFT -> {
+                    if (horizontalDragAccumPx > snapThresholdPx) {
+                        newEdge = BubbleEdge.RIGHT
+                        horizontalDragAccumPx = 0f
+                    }
+                }
+                BubbleEdge.FREE -> {
+                    newXDp = (cur.bubbleOffsetXDp + (dxPx / density).toInt())
+                        .coerceIn(0, (screenWidthDp - 64).coerceAtLeast(0))
+                    if (newXDp <= 16) {
+                        newEdge = BubbleEdge.LEFT
+                        newXDp = 0
+                    } else if (newXDp >= screenWidthDp - 84) {
+                        newEdge = BubbleEdge.RIGHT
+                        newXDp = 0
+                    }
+                }
             }
+
             cur.copy(
+                bubbleEdge = newEdge,
                 bubbleVerticalFraction = newYFrac,
                 bubbleOffsetXDp = newXDp
             )
@@ -224,14 +302,15 @@ object LunaOverlayWindowManager {
 
     @Synchronized
     fun detachOverlay() {
-        val view = composeView ?: return
+        val view = rootView ?: return
         val wm = windowManager
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         runCatching { wm?.removeView(view) }
-        composeView = null
+        rootView = null
         windowManager = null
         layoutParams = null
         lifecycleOwner = null
+        horizontalDragAccumPx = 0f
     }
 }
 
@@ -242,8 +321,18 @@ class LunaOverlayService : Service() {
 
         fun startOrTrigger(context: Context, startListening: Boolean = true) {
             val appContext = context.applicationContext
+            // Immediately attach overlay and trigger assistant on the main thread
+            // so it works even if background FGS restrictions apply on Android 15
+            if (LunaOverlayWindowManager.canShowSystemOverlay(appContext)) {
+                LunaOverlayWindowManager.ensureOverlayAttached(appContext)
+            }
+            LunaAssistantController.triggerFromSideButton(
+                appContext,
+                startListeningImmediately = startListening
+            )
+
             val intent = Intent(appContext, LunaOverlayService::class.java).apply {
-                putExtra("start_listening", startListening)
+                putExtra("start_listening", false)
             }
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -278,11 +367,13 @@ class LunaOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
-        val startListening = intent?.getBooleanExtra("start_listening", true) ?: true
+        val startListening = intent?.getBooleanExtra("start_listening", false) ?: false
         if (LunaOverlayWindowManager.canShowSystemOverlay(this)) {
             LunaOverlayWindowManager.ensureOverlayAttached(this)
         }
-        LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = startListening)
+        if (startListening) {
+            LunaAssistantController.triggerFromSideButton(this, startListeningImmediately = true)
+        }
         return START_STICKY
     }
 
