@@ -29,6 +29,9 @@ import com.ultrapg.luna.core.database.LunaDatabase
 import com.ultrapg.luna.core.database.MemoryEntity
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -71,6 +74,7 @@ object LunaAgentTools {
         "clipboard_action",
         "search_duckduckgo",
         "read_website",
+        "deep_research",
         "save_memory",
         "recall_memories",
         "forget_memory"
@@ -254,23 +258,59 @@ object LunaAgentTools {
         if (settings.webSearchEnabled) {
             addTool(
                 name = "search_duckduckgo",
-                description = "Search the web using DuckDuckGo for up-to-date grounding, facts, news, weather, prices, or URLs.",
+                description = "Search the web using DuckDuckGo for up-to-date grounding, facts, news, weather, prices, or URLs. Supports a single `query` OR multiple `queries` in parallel, plus optional `read_top_pages` to automatically pull full text from top websites.",
                 properties = JSONObject()
-                    .put("query", JSONObject().put("type", "string").put("description", "Search query in English or German"))
-                    .put("max_results", JSONObject().put("type", "integer").put("description", "Max results (default 5)")),
-                required = listOf("query")
+                    .put("query", JSONObject().put("type", "string").put("description", "Primary search query in English or German"))
+                    .put(
+                        "queries",
+                        JSONObject()
+                            .put("type", "array")
+                            .put("items", JSONObject().put("type", "string"))
+                            .put("description", "Optional list of multiple search queries (2-4 angles) to run in parallel for deeper research")
+                    )
+                    .put("max_results", JSONObject().put("type", "integer").put("description", "Max results per query (default 5)"))
+                    .put("read_top_pages", JSONObject().put("type", "integer").put("description", "Optional number of top result websites (0-4) to automatically fetch and read in parallel"))
+            )
+        }
+
+        if (settings.webSearchEnabled && settings.webReaderEnabled) {
+            addTool(
+                name = "deep_research",
+                description = "Perform deep multi-search and multi-website research when the user asks a complex question, wants comparisons, or asks to search deeper. Runs multiple DuckDuckGo search queries in parallel AND pulls full readable text from multiple top websites concurrently.",
+                properties = JSONObject()
+                    .put(
+                        "queries",
+                        JSONObject()
+                            .put("type", "array")
+                            .put("items", JSONObject().put("type", "string"))
+                            .put("description", "2 to 4 distinct search queries covering different angles of the user's question")
+                    )
+                    .put(
+                        "max_pages_to_read",
+                        JSONObject()
+                            .put("type", "integer")
+                            .put("description", "Number of top unique websites to fetch and extract in parallel (default 3, max 5)")
+                    ),
+                required = listOf("queries")
             )
         }
 
         if (settings.webReaderEnabled) {
             addTool(
                 name = "read_website",
-                description = "Fetch and read the clean article/page text content of any website URL for detailed grounding or summarization.",
-                properties = JSONObject().put(
-                    "url",
-                    JSONObject().put("type", "string").put("description", "Full HTTP/HTTPS URL to read")
-                ),
-                required = listOf("url")
+                description = "Fetch and read the clean article/page text content of one or multiple website URLs in parallel for detailed grounding or summarization.",
+                properties = JSONObject()
+                    .put(
+                        "url",
+                        JSONObject().put("type", "string").put("description", "Single HTTP/HTTPS URL to read")
+                    )
+                    .put(
+                        "urls",
+                        JSONObject()
+                            .put("type", "array")
+                            .put("items", JSONObject().put("type", "string"))
+                            .put("description", "Optional list of multiple HTTP/HTTPS URLs (up to 5) to fetch and read concurrently")
+                    )
             )
         }
 
@@ -360,13 +400,62 @@ object LunaAgentTools {
                     handleClipboard(context, action, text)
                 }
                 "search_duckduckgo" -> {
-                    val query = args.optString("query", "")
+                    val singleQuery = args.optString("query", "").trim()
+                    val queriesArr = args.optJSONArray("queries")
+                    val queriesList = mutableListOf<String>()
+                    if (singleQuery.isNotBlank()) queriesList.add(singleQuery)
+                    if (queriesArr != null) {
+                        for (i in 0 until queriesArr.length()) {
+                            val q = queriesArr.optString(i, "").trim()
+                            if (q.isNotBlank() && !queriesList.contains(q)) {
+                                queriesList.add(q)
+                            }
+                        }
+                    }
                     val maxResults = args.optInt("max_results", 5).coerceIn(1, 10)
-                    searchDuckDuckGo(query, maxResults)
+                    val readTopPages = args.optInt("read_top_pages", 0).coerceIn(0, 4)
+                    if (queriesList.size > 1 || readTopPages > 0) {
+                        executeMultiQuerySearch(queriesList.take(4), maxResults, readTopPages)
+                    } else {
+                        searchDuckDuckGo(queriesList.firstOrNull().orEmpty(), maxResults)
+                    }
+                }
+                "deep_research" -> {
+                    val queriesArr = args.optJSONArray("queries")
+                    val queriesList = mutableListOf<String>()
+                    if (queriesArr != null) {
+                        for (i in 0 until queriesArr.length()) {
+                            val q = queriesArr.optString(i, "").trim()
+                            if (q.isNotBlank() && !queriesList.contains(q)) {
+                                queriesList.add(q)
+                            }
+                        }
+                    }
+                    val fallbackQuery = args.optString("query", "").trim()
+                    if (queriesList.isEmpty() && fallbackQuery.isNotBlank()) {
+                        queriesList.add(fallbackQuery)
+                    }
+                    val maxPages = args.optInt("max_pages_to_read", 3).coerceIn(1, 5)
+                    executeMultiQuerySearch(queriesList.take(4), maxResultsPerQuery = 5, readTopPages = maxPages)
                 }
                 "read_website" -> {
-                    val url = args.optString("url", "")
-                    readWebsiteContent(url)
+                    val singleUrl = args.optString("url", "").trim()
+                    val urlsArr = args.optJSONArray("urls")
+                    val urlsList = mutableListOf<String>()
+                    if (singleUrl.isNotBlank()) urlsList.add(singleUrl)
+                    if (urlsArr != null) {
+                        for (i in 0 until urlsArr.length()) {
+                            val u = urlsArr.optString(i, "").trim()
+                            if (u.isNotBlank() && !urlsList.contains(u)) {
+                                urlsList.add(u)
+                            }
+                        }
+                    }
+                    if (urlsList.size > 1) {
+                        readMultipleWebsites(urlsList.take(5))
+                    } else {
+                        readWebsiteContent(urlsList.firstOrNull().orEmpty())
+                    }
                 }
                 "save_memory" -> {
                     val key = args.optString("key", "").trim()
@@ -809,16 +898,150 @@ object LunaAgentTools {
             val rawHtml = response.body?.string().orEmpty()
             val titleMatch = Regex("<title[^>]*>([\\s\\S]*?)</title>", RegexOption.IGNORE_CASE).find(rawHtml)
             val title = titleMatch?.groupValues?.get(1)?.let { stripHtmlTags(it) } ?: url
+            val domain = runCatching { Uri.parse(url).host?.removePrefix("www.") ?: "" }.getOrDefault("")
 
             val cleanedText = htmlToReadableText(rawHtml).take(10_000)
             return JSONObject()
                 .put("ok", response.isSuccessful)
                 .put("status_code", response.code)
                 .put("url", url)
+                .put("domain", domain)
                 .put("title", title)
                 .put("content", cleanedText)
                 .toString()
         }
+    }
+
+    /**
+     * Fetches and extracts readable text from multiple website URLs concurrently.
+     */
+    suspend fun readMultipleWebsites(urls: List<String>): String = coroutineScope {
+        val cleanUrls = urls.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(5)
+        if (cleanUrls.isEmpty()) {
+            return@coroutineScope JSONObject().put("ok", false).put("error", "Empty urls list").toString()
+        }
+
+        val fetchedPages = cleanUrls.map { u ->
+            async(Dispatchers.IO) {
+                runCatching {
+                    val raw = readWebsiteContent(u)
+                    JSONObject(raw)
+                }.getOrElse { err ->
+                    JSONObject()
+                        .put("ok", false)
+                        .put("url", u)
+                        .put("title", u)
+                        .put("error", err.message ?: "Failed to fetch")
+                }
+            }
+        }.awaitAll()
+
+        val pagesArr = JSONArray()
+        fetchedPages.forEach { pageJson ->
+            val trimmedContent = pageJson.optString("content", "").take(4500)
+            pageJson.put("content", trimmedContent)
+            pagesArr.put(pageJson)
+        }
+
+        val firstPage = fetchedPages.firstOrNull()
+        JSONObject()
+            .put("ok", true)
+            .put("pages_count", pagesArr.length())
+            .put("pages", pagesArr)
+            .put("title", "${pagesArr.length()} Websites Read")
+            .put("url", firstPage?.optString("url", "").orEmpty())
+            .put(
+                "content",
+                fetchedPages.mapIndexed { idx, p ->
+                    val t = p.optString("title", p.optString("url", "Source ${idx + 1}"))
+                    val u = p.optString("url", "")
+                    val c = p.optString("content", p.optString("error", ""))
+                    "### [${idx + 1}] $t ($u)\n$c"
+                }.joinToString("\n\n")
+            )
+            .toString()
+    }
+
+    /**
+     * Deep multi-query search & optional parallel multi-website content extraction.
+     * Runs all search queries concurrently, merges and deduplicates top organic results,
+     * and if `readTopPages > 0`, pulls the full readable text from the top unique URLs in parallel.
+     */
+    suspend fun executeMultiQuerySearch(
+        queries: List<String>,
+        maxResultsPerQuery: Int = 5,
+        readTopPages: Int = 0
+    ): String = coroutineScope {
+        val cleanQueries = queries.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(4)
+        if (cleanQueries.isEmpty()) {
+            return@coroutineScope JSONObject().put("ok", false).put("error", "No search queries provided").toString()
+        }
+
+        val searchJsons = cleanQueries.map { q ->
+            async(Dispatchers.IO) {
+                q to runCatching { JSONObject(searchDuckDuckGo(q, maxResultsPerQuery)) }.getOrNull()
+            }
+        }.awaitAll()
+
+        val mergedResults = JSONArray()
+        val seenUrls = mutableSetOf<String>()
+        val instantAnswers = mutableListOf<String>()
+        val queriesExecutedArr = JSONArray()
+
+        for ((q, json) in searchJsons) {
+            queriesExecutedArr.put(q)
+            if (json == null) continue
+            val ia = json.optString("instant_answer", "").trim()
+            if (ia.isNotBlank()) {
+                instantAnswers.add("[$q]: $ia")
+            }
+            val arr = json.optJSONArray("results") ?: continue
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val url = item.optString("url", "").trim()
+                if (url.isNotBlank() && seenUrls.add(url)) {
+                    mergedResults.put(
+                        JSONObject(item.toString())
+                            .put("rank", mergedResults.length() + 1)
+                            .put("matched_query", q)
+                    )
+                }
+            }
+        }
+
+        val pagesArr = JSONArray()
+        if (readTopPages > 0 && mergedResults.length() > 0) {
+            val topUrls = mutableListOf<String>()
+            for (i in 0 until mergedResults.length()) {
+                val u = mergedResults.optJSONObject(i)?.optString("url", "").orEmpty()
+                if (u.startsWith("http") && !u.endsWith(".pdf", ignoreCase = true)) {
+                    topUrls.add(u)
+                }
+                if (topUrls.size >= readTopPages) break
+            }
+
+            val pulledPages = topUrls.map { targetUrl ->
+                async(Dispatchers.IO) {
+                    runCatching {
+                        val pageObj = JSONObject(readWebsiteContent(targetUrl))
+                        pageObj.put("content", pageObj.optString("content", "").take(3800))
+                    }.getOrNull()
+                }
+            }.awaitAll().filterNotNull()
+
+            pulledPages.forEach { pagesArr.put(it) }
+        }
+
+        JSONObject()
+            .put("ok", true)
+            .put("query", cleanQueries.joinToString(" | "))
+            .put("queries", queriesExecutedArr)
+            .put("instant_answer", instantAnswers.distinct().joinToString("\n"))
+            .put("results_count", mergedResults.length())
+            .put("results", mergedResults)
+            .put("pages_read_count", pagesArr.length())
+            .put("pages", pagesArr)
+            .toString()
     }
 
     private suspend fun saveMemory(context: Context, key: String, value: String, category: String): String {

@@ -62,7 +62,7 @@ data class ToolExecutionRecord(
             val lower = name.trim().lowercase(Locale.ROOT)
             return when {
                 lower == "thinking" || lower == "thought" || lower == "gedacht" -> "THINKING"
-                lower == "search_duckduckgo" || lower == "read_website" -> "WEB"
+                lower == "search_duckduckgo" || lower == "read_website" || lower == "deep_research" -> "WEB"
                 lower == "save_memory" || lower == "recall_memories" || lower == "forget_memory" -> "MEMORY"
                 lower.startsWith("api_mcp") || lower.startsWith("mcp_api_") || lower.startsWith("builtin_mcp") -> "API_MCP"
                 lower.startsWith("mcp_") -> "MCP"
@@ -162,7 +162,7 @@ data class AgentCompletionResult(
  *   interactive step-by-step progress timeline while the assistant is working.
  */
 object OpenAiAgentEngine {
-    private const val MAX_AGENT_STEPS = 8
+    private const val MAX_AGENT_STEPS = 12
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val httpClient = OkHttpClient.Builder()
@@ -837,28 +837,39 @@ object OpenAiAgentEngine {
         }
 
         return """
-            You are Luna, a fast, intelligent, native Android Digital Assistant triggered via the phone's side button.
+            You are Luna, a warm, perceptive, and highly capable native Android voice assistant triggered from the phone's side button bubble.
             Current local time on phone: $nowStr.
             $langHint
             
-            ### STRICT VOICE / TTS OUTPUT RULES (FLOW TEXT ONLY):
-            - Your response is spoken aloud directly by a neural Text-to-Speech (TTS) engine.
-            - Write ONLY in smooth, natural, conversational flow text (Fließtext / full spoken sentences).
-            - NEVER use Markdown tables, bullet points, numbered lists, headers (#), bold/italic asterisks (*), code blocks, or URLs.
-            - Summarize comparisons, lists, or data into natural spoken sentences that are easy to listen to.
-            - If you use internal thinking (<think>...</think>), keep all reasoning inside <think>...</think> and put only the final spoken flow-text answer outside.
+            ### NATURAL SPOKEN VOICE PERSONA (ASSISTANT BUBBLE MODE):
+            - Your words are spoken aloud in real time by a neural Text-to-Speech (TTS) engine while the user listens via the side-notch assistant bubble.
+            - Speak like an intelligent, natural, friendly human conversation partner — never like a textbook, robot, or search engine readout.
+            - Use natural spoken rhythm, smooth sentence transitions, and conversational phrasing (use natural contractions like "I've", "it's", "that's" in English, or natural everyday spoken Deutsch in German).
+            - Never start with stiff robotic preambles like "According to my web search", "Based on the provided results", "Here is a summary", or "As an AI". Jump straight into the answer naturally.
+            - Write ONLY in smooth spoken flow text (Fließtext / full spoken sentences).
+            - NEVER output Markdown tables, bullet points, numbered lists, headers (#), asterisks (*), code blocks, raw URLs, or bracketed citations ([1]).
+            - Format numbers, currencies, units, percentages, and times so they sound effortless when read aloud by TTS (for example, say "around twenty-five percent" or "25 percent" cleanly rather than dense symbol strings).
+            - Keep internal reasoning strictly inside <think>...</think> and put only the final spoken flow-text answer outside.
             
-            ### MULTI-STEP TASKS, BUILT-IN MCPs & SHORTEST-PATH SPEED RULES (CRITICAL FOR VOICE):
-            You can execute multi-step tasks and call multiple tools across steps or in parallel, including:
+            ### ADAPTIVE SEARCH DEPTH & MULTI-STEP EXECUTION RULES:
+            You have full access to:
             - Android Hardware & System Actions (`set_flashlight`, `open_app`, `open_url_or_deep_link`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`)
-            - Web Grounding (`search_duckduckgo`, `read_website`)
+            - Web Search & Deep Multi-Site Grounding (`search_duckduckgo`, `deep_research`, `read_website`)
             - Persistent Memory (`save_memory`, `recall_memories`, `forget_memory`)
             - Model/API Built-In MCP tools and User MCP Server tools.
-            Because you are a real-time speech assistant, ALWAYS choose the SHORTEST, FASTEST path to get information or complete a task:
-            1. Batch independent actions together: If the user asks for multiple actions at once (e.g., "turn on the flashlight, set volume to 40%, and open Spotify"), emit all `tool_calls` in a SINGLE step so they run in parallel.
-            2. Fastest web lookup first: When looking up facts, news, weather, or prices, call `search_duckduckgo` (or a specialized MCP tool if available) first. If the returned `instant_answer` or `results` snippets already answer the question, respond IMMEDIATELY in the next turn without calling `read_website`. Only call `read_website` as a follow-up step when you genuinely need full-page details not present in the search snippets or when the user asks you to read a specific webpage.
-            3. Self-correction on app names: If `open_app` returns `installed_apps_sample` because an app name didn't match, pick the exact matching app name from `installed_apps_sample` and call `open_app` immediately.
-            4. Chain dependent steps cleanly: When a request requires sequential steps (e.g., search for a topic, read a specific article URL, save a summary to memory, or open a URL/app), execute each necessary step concisely and then give a clear spoken confirmation.
+            
+            Match your execution strategy to what the user is asking:
+            1. Quick Actions & Simple Facts (Shortest Path):
+               - For device commands (flashlight, volume, opening apps, alarms) or quick single-fact questions, take the shortest, fastest path.
+               - Batch multiple independent actions into a single step so they run in parallel, and confirm naturally in 1 to 2 spoken sentences.
+            2. Deep Research, Complex Questions & "Search Deeper" Requests (Multi-Search + Multi-Website Reading):
+               - Whenever the user asks you to search deeper, research a topic thoroughly, compare products/options, explain recent news/events in detail, or when initial search snippets are too shallow or conflicting:
+                 a) Use `deep_research` (passing 2 to 4 distinct search queries in `queries` and `max_pages_to_read = 3` or `4`) OR emit multiple `search_duckduckgo` calls from different angles (`queries` array or parallel tool calls).
+                 b) Pull and read multiple websites in parallel using `read_website` (`urls: [...]` array or multiple parallel `read_website` calls) so you get the full article context from several independent sources instead of relying on snippets alone.
+                 c) If reading those pages reveals a missing detail or a specific follow-up lead, do another targeted search or read additional URLs before answering.
+                 d) Synthesize everything you found across those multiple searches and websites into a cohesive, insightful, and natural spoken response.
+            3. Self-Correction on App Names:
+               - If `open_app` returns `installed_apps_sample` because an app name didn't match directly, immediately call `open_app` with the exact matching name from `installed_apps_sample`.
             $memoryBlock$customExtra
         """.trimIndent()
     }
@@ -1058,8 +1069,23 @@ object OpenAiAgentEngine {
                     status = statusStr
                 )
             }
-            "search_duckduckgo" -> {
-                val q = args.optString("query", "")
+            "search_duckduckgo", "deep_research" -> {
+                val queriesArr = outJson?.optJSONArray("queries") ?: args.optJSONArray("queries")
+                val queriesList = mutableListOf<String>()
+                if (queriesArr != null) {
+                    for (i in 0 until queriesArr.length()) {
+                        val qItem = queriesArr.optString(i, "").trim()
+                        if (qItem.isNotBlank()) queriesList.add(qItem)
+                    }
+                }
+                val primaryQ = args.optString("query", "").ifBlank { outJson?.optString("query", "").orEmpty() }
+                if (queriesList.isEmpty() && primaryQ.isNotBlank()) {
+                    queriesList.add(primaryQ)
+                }
+                val qLabel = queriesList.joinToString(", ")
+                val pagesReadCount = outJson?.optInt("pages_read_count", 0) ?: 0
+                val isDeep = fnName.equals("deep_research", ignoreCase = true) || queriesList.size > 1 || pagesReadCount > 0
+
                 val instant = outJson?.optString("instant_answer", "").orEmpty()
                 val arr = outJson?.optJSONArray("results")
                 val formattedResults = buildString {
@@ -1067,6 +1093,12 @@ object OpenAiAgentEngine {
                         append(if (isDe) "Direktantwort: " else "Instant Answer: ")
                         append(instant)
                         append("\n\n")
+                    }
+                    if (pagesReadCount > 0) {
+                        append(
+                            if (isDe) "Volltext von $pagesReadCount Webseiten parallel extrahiert.\n\n"
+                            else "Extracted full text from $pagesReadCount websites in parallel.\n\n"
+                        )
                     }
                     if (arr != null && arr.length() > 0) {
                         for (i in 0 until arr.length()) {
@@ -1084,11 +1116,33 @@ object OpenAiAgentEngine {
                     }
                 }.trim()
 
+                val titleText = if (isDeep) {
+                    if (isDe) {
+                        "Tiefensuche (${queriesList.size} Suchen" + (if (pagesReadCount > 0) ", $pagesReadCount Seiten)" else ")")
+                    } else {
+                        "Deep Search (${queriesList.size} queries" + (if (pagesReadCount > 0) ", $pagesReadCount sites)" else ")")
+                    }
+                } else {
+                    if (isDe) "Suche: ${qLabel.take(24)}" else "Search: ${qLabel.take(24)}"
+                }
+
+                val didText = if (isDeep) {
+                    if (isDe) {
+                        "Mehrstufige DuckDuckGo-Suche (${queriesList.joinToString(" | ")})" +
+                            if (pagesReadCount > 0) " + $pagesReadCount Webseiten gelesen" else ""
+                    } else {
+                        "Multi-query DuckDuckGo research (${queriesList.joinToString(" | ")})" +
+                            if (pagesReadCount > 0) " + pulled $pagesReadCount websites" else ""
+                    }
+                } else {
+                    if (isDe) "DuckDuckGo-Websuche nach \"$qLabel\"" else "Searched DuckDuckGo for \"$qLabel\""
+                }
+
                 ToolExecutionRecord(
                     stepIndex = stepIndex,
                     toolName = fnName,
-                    displayTitle = if (isDe) "Suche: ${q.take(24)}" else "Search: ${q.take(24)}",
-                    whatItDid = if (isDe) "DuckDuckGo-Websuche nach \"$q\"" else "Searched DuckDuckGo for \"$q\"",
+                    displayTitle = titleText,
+                    whatItDid = didText,
                     resultSummary = formattedResults,
                     rawArgumentsJson = rawArgs,
                     rawResultJson = rawOutput,
@@ -1098,14 +1152,24 @@ object OpenAiAgentEngine {
                 )
             }
             "read_website" -> {
+                val pagesArr = outJson?.optJSONArray("pages")
+                val pagesCount = pagesArr?.length() ?: 0
                 val u = args.optString("url", "")
                 val title = outJson?.optString("title", u).orEmpty()
                 val content = outJson?.optString("content", "").orEmpty().take(1200)
                 ToolExecutionRecord(
                     stepIndex = stepIndex,
                     toolName = fnName,
-                    displayTitle = if (isDe) "Webseite gelesen" else "Read Website",
-                    whatItDid = if (isDe) "Webseite abgerufen und Text extrahiert: $u" else "Fetched and extracted readable text from: $u",
+                    displayTitle = if (pagesCount > 1) {
+                        if (isDe) "$pagesCount Webseiten gelesen" else "Read $pagesCount Websites"
+                    } else {
+                        if (isDe) "Webseite gelesen" else "Read Website"
+                    },
+                    whatItDid = if (pagesCount > 1) {
+                        if (isDe) "$pagesCount Webseiten parallel abgerufen und Volltext extrahiert" else "Fetched and extracted readable text from $pagesCount websites in parallel"
+                    } else {
+                        if (isDe) "Webseite abgerufen und Text extrahiert: $u" else "Fetched and extracted readable text from: $u"
+                    },
                     resultSummary = buildString {
                         if (title.isNotBlank()) append("$title\n\n")
                         append(content.ifBlank { rawOutput.take(800) })
@@ -1239,12 +1303,27 @@ object OpenAiAgentEngine {
                 if (isDe) "Prüfe Gerätestatus..." else "Checking device status..."
             }
             "search_duckduckgo" -> {
+                val queriesArr = args.optJSONArray("queries")
                 val q = args.optString("query", "")
-                if (isDe) "DuckDuckGo-Suche: \"$q\"" else "Searching DuckDuckGo: \"$q\""
+                if (queriesArr != null && queriesArr.length() > 1) {
+                    if (isDe) "Tiefensuche (${queriesArr.length()} Anfragen)..." else "Deep search (${queriesArr.length()} queries)..."
+                } else {
+                    if (isDe) "DuckDuckGo-Suche: \"$q\"" else "Searching DuckDuckGo: \"$q\""
+                }
+            }
+            "deep_research" -> {
+                val queriesArr = args.optJSONArray("queries")
+                val qCount = queriesArr?.length() ?: 2
+                if (isDe) "Tiefenrecherche ($qCount Suchen & Webseiten)..." else "Deep research ($qCount searches & sites)..."
             }
             "read_website" -> {
+                val urlsArr = args.optJSONArray("urls")
                 val u = args.optString("url", "")
-                if (isDe) "Lese Webseite: $u" else "Reading website: $u"
+                if (urlsArr != null && urlsArr.length() > 1) {
+                    if (isDe) "Lese ${urlsArr.length()} Webseiten parallel..." else "Reading ${urlsArr.length()} websites in parallel..."
+                } else {
+                    if (isDe) "Lese Webseite: $u" else "Reading website: $u"
+                }
             }
             "save_memory" -> {
                 val k = args.optString("key", "")

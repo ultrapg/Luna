@@ -1331,7 +1331,7 @@ private fun ToolStepDetailCard(
         }
 
         when {
-            lowerTool == "search_duckduckgo" && parsedJson != null -> {
+            (lowerTool == "search_duckduckgo" || lowerTool == "deep_research") && parsedJson != null -> {
                 DuckDuckGoResultCards(
                     resultJson = parsedJson,
                     isGerman = isGerman,
@@ -1404,8 +1404,26 @@ private fun DuckDuckGoResultCards(
 ) {
     val instant = resultJson.optString("instant_answer", "").trim()
     val resultsArr = resultJson.optJSONArray("results")
+    val pagesArr = resultJson.optJSONArray("pages")
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (pagesArr != null && pagesArr.length() > 0) {
+            Text(
+                text = if (isGerman) "Gelesene Webseiten (${pagesArr.length()})" else "Extracted Websites (${pagesArr.length()})",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF81C784),
+                fontWeight = FontWeight.SemiBold
+            )
+            for (i in 0 until pagesArr.length()) {
+                val pageObj = pagesArr.optJSONObject(i) ?: continue
+                WebsiteReaderResultCard(
+                    resultJson = pageObj,
+                    isGerman = isGerman,
+                    onOpenUrl = onOpenUrl
+                )
+            }
+        }
+
         Text(
             text = if (isGerman) "Gefundene Web-Ergebnisse" else "Web Search Grounding Results",
             style = MaterialTheme.typography.labelSmall,
@@ -1498,6 +1516,33 @@ private fun DuckDuckGoResultCards(
 
 @Composable
 private fun WebsiteReaderResultCard(
+    resultJson: JSONObject,
+    isGerman: Boolean,
+    onOpenUrl: (String) -> Unit
+) {
+    val pagesArr = resultJson.optJSONArray("pages")
+    if (pagesArr != null && pagesArr.length() > 1) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (i in 0 until pagesArr.length()) {
+                val p = pagesArr.optJSONObject(i) ?: continue
+                SingleWebsiteResultCard(
+                    resultJson = p,
+                    isGerman = isGerman,
+                    onOpenUrl = onOpenUrl
+                )
+            }
+        }
+    } else {
+        SingleWebsiteResultCard(
+            resultJson = resultJson,
+            isGerman = isGerman,
+            onOpenUrl = onOpenUrl
+        )
+    }
+}
+
+@Composable
+private fun SingleWebsiteResultCard(
     resultJson: JSONObject,
     isGerman: Boolean,
     onOpenUrl: (String) -> Unit
@@ -1664,6 +1709,7 @@ private fun iconForToolName(toolName: String, category: String = ""): ImageVecto
     val lower = toolName.lowercase(Locale.ROOT)
     return when {
         lower == "thinking" || lower == "thought" || lower == "gedacht" || category == "THINKING" -> Icons.Default.Psychology
+        lower == "deep_research" -> Icons.Default.TravelExplore
         lower == "search_duckduckgo" -> Icons.Default.Search
         lower == "read_website" -> Icons.Default.Language
         lower == "set_flashlight" -> Icons.Default.FlashlightOn
