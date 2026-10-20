@@ -4,9 +4,12 @@ import android.os.Build
 import android.provider.Settings
 import android.view.ViewGroup
 import android.view.WindowManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,11 +40,13 @@ import com.ultrapg.luna.assistant.AssistantLiveState
 import com.ultrapg.luna.assistant.AssistantOverlayPhase
 import com.ultrapg.luna.assistant.AssistantRoleHelper
 import com.ultrapg.luna.core.settings.BubbleEdge
+import com.ultrapg.luna.core.settings.BubbleStyle
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
-import com.ultrapg.luna.overlay.GeminiSidePillOverlay
 import com.ultrapg.luna.overlay.LunaOverlayService
 import com.ultrapg.luna.overlay.LunaOverlayWindowManager
+import com.ultrapg.luna.overlay.LunaPillStyleMiniPreview
 import com.ultrapg.luna.overlay.LunaScreenMetrics
+import com.ultrapg.luna.overlay.LunaSidePillOverlay
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -55,9 +60,10 @@ fun OverlayConfigScreen(
     val settings by LunaSettingsRepository.settingsFlow.collectAsState()
     val scrollState = rememberScrollState()
     val isGerman = settings.appLanguage.isGerman
+    val systemDark = isSystemInDarkTheme()
 
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    // 0 = Listening (white bars), 1 = Thinking (white stretched pill), 2 = Speaking (light blue bars)
+    // 0 = Listening, 1 = Thinking, 2 = Speaking
     var previewMode by remember { mutableIntStateOf(0) }
     var showFullScreenCalibrator by remember { mutableStateOf(false) }
 
@@ -84,6 +90,11 @@ fun OverlayConfigScreen(
             )
         }
     }
+
+    val previewCanvasBg = if (systemDark) Color(0xFF090B10) else Color(0xFFE7ECF8)
+    val previewCanvasBorder = if (systemDark) Color(0xFF252A3A) else Color(0xFFC4CEE4)
+    val previewGuideTitleColor = if (systemDark) Color(0xFF4A5268) else Color(0xFF5D6B8A)
+    val previewGuideSubColor = if (systemDark) Color(0xFF687089) else Color(0xFF647291)
 
     Column(
         modifier = Modifier
@@ -115,9 +126,35 @@ fun OverlayConfigScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (systemDark) Icons.Default.DarkMode else Icons.Default.LightMode,
+                                contentDescription = null,
+                                modifier = Modifier.size(13.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = if (systemDark) {
+                                    if (isGerman) "Dunkel" else "Dark"
+                                } else {
+                                    if (isGerman) "Hell" else "Light"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
                 }
 
-                // State switcher: Listen (White Bars) | Think (White Stretched Pill) | Speak (Light-Blue Bars)
+                // State switcher: Listen | Think | Speak
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     val labels = if (isGerman) {
                         listOf("Hören", "Denken", "Sprechen")
@@ -146,8 +183,8 @@ fun OverlayConfigScreen(
                         .fillMaxWidth()
                         .height(320.dp)
                         .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0xFF090B10))
-                        .border(1.5.dp, Color(0xFF252A3A), RoundedCornerShape(22.dp))
+                        .background(previewCanvasBg)
+                        .border(1.5.dp, previewCanvasBorder, RoundedCornerShape(22.dp))
                         .onSizeChanged { canvasHeightPx = it.height.coerceAtLeast(1) }
                         .pointerInput(Unit) {
                             detectDragGestures { change, dragAmount ->
@@ -173,7 +210,7 @@ fun OverlayConfigScreen(
                             text = "${(settings.bubbleVerticalFraction * 100).roundToInt()}%",
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF4A5268)
+                            color = previewGuideTitleColor
                         )
                         Text(
                             text = if (isGerman) {
@@ -182,7 +219,7 @@ fun OverlayConfigScreen(
                                 "Drag the pill up/down here or open Fullscreen Mode to align it directly next to your physical power button."
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF687089)
+                            color = previewGuideSubColor
                         )
                     }
 
@@ -200,7 +237,7 @@ fun OverlayConfigScreen(
                             .align(horizontalAlign)
                             .offset { IntOffset(0, yOffsetPx) }
                     ) {
-                        GeminiSidePillOverlay(
+                        LunaSidePillOverlay(
                             liveState = previewState,
                             settings = settings,
                             micRms = 0.56f,
@@ -250,7 +287,117 @@ fun OverlayConfigScreen(
             }
         }
 
-        // 2. Clean Full-Width Setup Actions
+        // 2. 5 Selectable Pill Styles (Default = Classic Equalizer)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = if (isGerman) "Pill-Stil (5 Designs)" else "Pill Style (5 Designs)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (isGerman) {
+                        "Passt sich automatisch an den System-Hell- und Dunkelmodus an."
+                    } else {
+                        "Automatically adapts to system Light and Dark mode."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                BubbleStyle.entries.forEach { style ->
+                    val isSelected = settings.bubbleStyle == style
+                    Surface(
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(
+                            width = if (isSelected) 1.5.dp else 1.dp,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            }
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable {
+                                LunaSettingsRepository.update(context) {
+                                    it.copy(bubbleStyle = style)
+                                }
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            LunaPillStyleMiniPreview(
+                                style = style,
+                                isSpeaking = previewMode == 2,
+                                isThinking = previewMode == 1,
+                                modifier = Modifier
+                                    .width(26.dp)
+                                    .height(64.dp)
+                            )
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = if (isGerman) style.titleDe else style.titleEn,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (isGerman) style.subtitleDe else style.subtitleEn,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f)
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = {
+                                    LunaSettingsRepository.update(context) {
+                                        it.copy(bubbleStyle = style)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Clean Full-Width Setup Actions
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
             shape = RoundedCornerShape(20.dp),
@@ -321,7 +468,7 @@ fun OverlayConfigScreen(
             }
         }
 
-        // 3. Position, Size & 3s Auto-Send Controls
+        // 4. Position, Size & Auto-Send Controls
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
             shape = RoundedCornerShape(20.dp),
@@ -435,6 +582,7 @@ fun OverlayConfigScreen(
                     onClick = {
                         LunaSettingsRepository.update(context) {
                             it.copy(
+                                bubbleStyle = BubbleStyle.CLASSIC_NOTCH,
                                 bubbleEdge = BubbleEdge.RIGHT,
                                 bubbleVerticalFraction = 0.28f,
                                 bubbleWidthDp = 28,
@@ -494,11 +642,12 @@ fun OverlayConfigScreen(
                 LunaScreenMetrics.getRealScreenHeightPx(context).coerceAtLeast(1)
             }
             var calibratorTopOnScreenPx by remember { mutableIntStateOf(0) }
+            val backdropColor = if (systemDark) Color(0xE607090E) else Color(0xE6E9EEF8)
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xE607090E))
+                    .background(backdropColor)
                     .onGloballyPositioned { coords ->
                         calibratorTopOnScreenPx = coords.positionOnScreen().y.roundToInt()
                     }
@@ -639,7 +788,7 @@ fun OverlayConfigScreen(
                         .align(edgeAlign)
                         .offset { IntOffset(0, realYOffsetPx) }
                 ) {
-                    GeminiSidePillOverlay(
+                    LunaSidePillOverlay(
                         liveState = previewState,
                         settings = settings,
                         micRms = 0.58f,

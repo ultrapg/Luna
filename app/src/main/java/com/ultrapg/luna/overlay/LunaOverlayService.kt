@@ -280,7 +280,7 @@ object LunaOverlayWindowManager {
                 }
 
                 if (liveState.isVisible || liveState.isDismissing) {
-                    GeminiSidePillOverlay(
+                    LunaSidePillOverlay(
                         liveState = liveState,
                         settings = curSettings,
                         micRms = micRms,

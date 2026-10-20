@@ -121,6 +121,56 @@ enum class BubbleEdge(val id: String, val labelEn: String, val labelDe: String) 
     }
 }
 
+enum class BubbleStyle(
+    val id: String,
+    val titleEn: String,
+    val titleDe: String,
+    val subtitleEn: String,
+    val subtitleDe: String
+) {
+    CLASSIC_NOTCH(
+        id = "classic_notch",
+        titleEn = "Classic Equalizer (Default)",
+        titleDe = "Klassischer Equalizer (Standard)",
+        subtitleEn = "Vertical equalizer bars & stretched thinking pill",
+        subtitleDe = "Vertikale Equalizer-Balken & gestreckte Denk-Pill"
+    ),
+    FLUID_WAVE(
+        id = "fluid_wave",
+        titleEn = "Fluid Wave Ribbon",
+        titleDe = "Fließende Wellen-Linie",
+        subtitleEn = "Dual harmonic sine-wave ribbons flowing vertically",
+        subtitleDe = "Harmonische Doppel-Wellenlinien im vertikalen Fluss"
+    ),
+    DYNAMIC_ORB(
+        id = "dynamic_orb",
+        titleEn = "Material 3 Aura Orb",
+        titleDe = "Material 3 Aura-Orb",
+        subtitleEn = "Tonal capsule with a breathing multi-ring voice orb",
+        subtitleDe = "Tonale Kapsel mit atmendem Mehrkreis-Sprach-Orb"
+    ),
+    MINIMAL_BLADE(
+        id = "minimal_blade",
+        titleEn = "Minimal Edge Blade",
+        titleDe = "Minimalistische Rand-Klinge",
+        subtitleEn = "Sleek hardware-edge light bar with reactive core glow",
+        subtitleDe = "Schlanke Hardware-Rand-Lichtleiste mit reaktivem Fokus"
+    ),
+    DOT_MATRIX(
+        id = "dot_matrix",
+        titleEn = "Dot Matrix Pulse",
+        titleDe = "Punkt-Matrix-Puls",
+        subtitleEn = "Vertical 3-column LED matrix with reactive level dots",
+        subtitleDe = "Vertikale 3-Spalten-LED-Matrix mit reaktiven Pegelpunkten"
+    );
+
+    companion object {
+        fun fromId(id: String?): BubbleStyle {
+            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: CLASSIC_NOTCH
+        }
+    }
+}
+
 enum class TtsVoiceModelId(
     val id: String,
     val langCode: String,
@@ -228,6 +278,7 @@ data class LunaSettings(
     val customTtsDataDirPath: String = "",
 
     // Vertical Side-Notch Bubble Settings (Slim vertical pill flush with screen edge)
+    val bubbleStyle: BubbleStyle = BubbleStyle.CLASSIC_NOTCH,
     val bubbleEdge: BubbleEdge = BubbleEdge.RIGHT,
     val bubbleVerticalFraction: Float = 0.28f, // 28% from top right next to physical power/side button
     val bubbleOffsetXDp: Int = 0,
@@ -359,6 +410,7 @@ object LunaSettingsRepository {
             customTtsModelPath = p.getString("custom_tts_model_path", "") ?: "",
             customTtsTokensPath = p.getString("custom_tts_tokens_path", "") ?: "",
             customTtsDataDirPath = p.getString("custom_tts_datadir_path", "") ?: "",
+            bubbleStyle = BubbleStyle.fromId(p.getString("bubble_style", BubbleStyle.CLASSIC_NOTCH.id)),
             bubbleEdge = BubbleEdge.fromId(p.getString("bubble_edge", BubbleEdge.RIGHT.id)),
             bubbleVerticalFraction = p.getFloat("bubble_vertical_fraction", 0.28f).coerceIn(0.05f, 0.90f),
             bubbleOffsetXDp = p.getInt("bubble_offset_x_dp", 0),
@@ -419,6 +471,7 @@ object LunaSettingsRepository {
             .putString("custom_tts_model_path", s.customTtsModelPath)
             .putString("custom_tts_tokens_path", s.customTtsTokensPath)
             .putString("custom_tts_datadir_path", s.customTtsDataDirPath)
+            .putString("bubble_style", s.bubbleStyle.id)
             .putString("bubble_edge", s.bubbleEdge.id)
             .putFloat("bubble_vertical_fraction", s.bubbleVerticalFraction)
             .putInt("bubble_offset_x_dp", s.bubbleOffsetXDp)

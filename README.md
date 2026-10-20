@@ -6,13 +6,15 @@
 
 ## Key Features
 
-### 1. Edge-Snapped Side-Notch Bubble & Material 3 Physics
+### 1. Edge-Snapped Side-Notch Bubble, 5 Pill Styles & Light/Dark Mode
 - **Native Default Digital Assistant (`ROLE_ASSISTANT`)**: Registers as Android's system-wide `VoiceInteractionService`, `VoiceInteractionSessionService`, `ACTION_ASSIST` handler, and optional `AccessibilityService` overlay.
-- **Minimal Vertical Side-Notch Pill**: Snaps flush against the left or right screen edge right next to the physical power/side button (`28dp × 104dp`), featuring Material Design 3 spatial spring pop-out physics and smooth post-speech fade-away transitions.
-- **Reactive Visual States**:
-  - **Listening**: Clean white 5-band audio-reactive microphone waveform.
-  - **Thinking**: Smoothly stretching white pill loading animation.
-  - **Speaking**: Live light-blue (`#64B5F6`) 5-band audio-reactive equalizer driven directly by the synthesized neural TTS audio stream.
+- **5 Selectable Pill Styles**:
+  1. **Classic Equalizer (Default)**: Vertical audio-reactive equalizer bars & stretched pill thinking indicator.
+  2. **Fluid Wave Ribbon**: Dual harmonic sine-wave ribbons flowing vertically along the capsule.
+  3. **Material 3 Aura Orb**: Tonal capsule with a breathing voice orb and symmetric vertical acoustic ripples.
+  4. **Minimal Edge Blade**: Ultra-sleek hardware-edge light bar with a reactive glowing core and scanner sweep.
+  5. **Dot Matrix Pulse**: Vertical 3-column LED dot-matrix level visualizer and chasing wave pulse.
+- **Automatic Light & Dark Mode Adaptation**: Both the side-notch overlay and the in-app UI automatically adapt to Android's system Light Mode and Dark Mode in real time.
 - **Outside-Touch Auto-Dismiss & Persistent App-Launch Continuity**: Tapping anywhere outside the bubble immediately stops and dismisses the assistant, while launching external apps (`open_app`, settings, timers, deep links) keeps the bubble alive so Luna always finishes speaking her confirmation.
 - **Fullscreen Power-Button Calibration**: Fullscreen edge-to-edge calibration mode using real display hardware metrics (`WindowManager.maximumWindowMetrics`) so you can drag the notch to the exact pixel height of your physical side button.
 - **Continuous Conversation Window**: Re-triggering the side button within a configurable window (default **20 seconds**) automatically continues the active conversation with full memory of previous messages and tool outputs; waiting longer starts a fresh chat session.

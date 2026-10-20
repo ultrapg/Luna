@@ -157,7 +157,7 @@ data class AgentCompletionResult(
  *
  * Features:
  * - Connects to any OpenAI-compatible endpoint (`/v1/chat/completions`, `/v1/models`) —
- *   OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, vLLM, Google Gemini OpenAI endpoint, etc.
+ *   OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, vLLM, etc.
  * - Supports both client-side tools (Android Hardware, Web Search/Reader, Memory, User MCP Servers)
  *   AND API Built-In MCPs (`<baseUrl>/mcp` auto-discovery + server-executed `executed_tools` / `mcp_calls` / `citations`).
  * - Streams live multi-step execution traces (`onLiveTraceUpdated`) so the chat UI renders a live

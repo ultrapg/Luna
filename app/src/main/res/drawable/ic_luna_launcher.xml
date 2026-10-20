@@ -7,7 +7,7 @@
     <path
         android:fillColor="#0D111E"
         android:pathData="M0,0h108v108h-108z" />
-    <!-- Outer Gemini-inspired glowing ring -->
+    <!-- Outer Luna glowing ring -->
     <path
         android:fillColor="#4E82EE"
         android:fillAlpha="0.22"

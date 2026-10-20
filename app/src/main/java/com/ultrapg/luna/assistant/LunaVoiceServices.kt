@@ -47,14 +47,14 @@ import com.ultrapg.luna.core.settings.BubbleEdge
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.speech.LunaTtsEngine
 import com.ultrapg.luna.overlay.ComposeOverlayLifecycleOwner
-import com.ultrapg.luna.overlay.GeminiSidePillOverlay
+import com.ultrapg.luna.overlay.LunaSidePillOverlay
 import com.ultrapg.luna.overlay.LunaOverlayService
 import com.ultrapg.luna.overlay.LunaOverlayWindowManager
 import com.ultrapg.luna.overlay.LunaScreenMetrics
 
 /**
  * Helper to check and request Android's Default Digital Assistant role (`ROLE_ASSISTANT`)
- * so holding the physical side/power button invokes Luna just like Google Gemini.
+ * so holding the physical side/power button invokes Luna directly.
  */
 object AssistantRoleHelper {
     fun isDefaultAssistant(context: Context): Boolean {
@@ -276,7 +276,7 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
                 }
 
                 if (liveState.isVisible || liveState.isDismissing) {
-                    GeminiSidePillOverlay(
+                    LunaSidePillOverlay(
                         liveState = liveState,
                         settings = curSettings,
                         micRms = micRms,
@@ -465,7 +465,7 @@ class AssistTrampolineActivity : ComponentActivity() {
                 }
 
                 if (liveState.isVisible || liveState.isDismissing) {
-                    GeminiSidePillOverlay(
+                    LunaSidePillOverlay(
                         liveState = liveState,
                         settings = curSettings,
                         micRms = micRms,

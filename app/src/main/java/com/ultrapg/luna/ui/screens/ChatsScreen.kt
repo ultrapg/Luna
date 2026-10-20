@@ -12,6 +12,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -296,7 +297,7 @@ fun ChatsScreen(
                         modifier = Modifier
                             .size(56.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF1E2433)),
+                            .background(MaterialTheme.colorScheme.secondaryContainer),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -362,7 +363,7 @@ fun ChatsScreen(
             }
         }
 
-        // Clean Gemini-Style Bottom Pill Composer
+        // Clean Bottom Pill Composer
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -554,8 +555,17 @@ private fun LiveAgentExecutionBanner(
     onSendListening: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF131722) else Color(0xFFEEF3FF)
+    val stepRowBg = if (isDark) Color(0xFF1B2030) else Color(0xFFE2EAF9)
+    val thinkingBoxBg = if (isDark) Color(0xFF1D2233) else Color(0xFFF3EEFF)
+    val primaryText = if (isDark) Color.White else Color(0xFF191C22)
+    val subText = if (isDark) Color(0xFF90CAF9) else Color(0xFF1B5EDB)
+    val thinkingAccent = if (isDark) Color(0xFFB388FF) else Color(0xFF673AB7)
+    val thinkingBodyColor = if (isDark) Color(0xFFE1BEE7) else Color(0xFF3E276B)
+
     Surface(
-        color = Color(0xFF131722),
+        color = cardBg,
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
         modifier = Modifier
@@ -581,7 +591,7 @@ private fun LiveAgentExecutionBanner(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.2.dp,
                         color = when (uiState.phase) {
-                            AssistantOverlayPhase.SPEAKING -> Color(0xFF64B5F6)
+                            AssistantOverlayPhase.SPEAKING -> if (isDark) Color(0xFF64B5F6) else Color(0xFF1B6EF3)
                             else -> MaterialTheme.colorScheme.primary
                         }
                     )
@@ -598,7 +608,7 @@ private fun LiveAgentExecutionBanner(
                             },
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
+                            color = primaryText,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -612,7 +622,7 @@ private fun LiveAgentExecutionBanner(
                                     "Multi-step execution: $doneCount/$totalCount steps"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF90CAF9)
+                                color = subText
                             )
                         }
                     }
@@ -632,7 +642,7 @@ private fun LiveAgentExecutionBanner(
                         onClick = onCancel,
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.White.copy(alpha = 0.8f))
+                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = primaryText.copy(alpha = 0.75f))
                     }
                 }
             }
@@ -640,9 +650,9 @@ private fun LiveAgentExecutionBanner(
             // Live Thinking Stream Preview
             if (uiState.activeThinkingText.isNotBlank()) {
                 Surface(
-                    color = Color(0xFF1D2233),
+                    color = thinkingBoxBg,
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, Color(0xFFB388FF).copy(alpha = 0.3f)),
+                    border = BorderStroke(1.dp, thinkingAccent.copy(alpha = 0.3f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -653,7 +663,7 @@ private fun LiveAgentExecutionBanner(
                         Icon(
                             imageVector = Icons.Default.Psychology,
                             contentDescription = null,
-                            tint = Color(0xFFB388FF),
+                            tint = thinkingAccent,
                             modifier = Modifier.size(16.dp).padding(top = 2.dp)
                         )
                         Text(
@@ -661,7 +671,7 @@ private fun LiveAgentExecutionBanner(
                                 ?: uiState.activeThinkingText.takeLast(140),
                             style = MaterialTheme.typography.bodySmall,
                             fontStyle = FontStyle.Italic,
-                            color = Color(0xFFE1BEE7),
+                            color = thinkingBodyColor,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -677,12 +687,12 @@ private fun LiveAgentExecutionBanner(
                 ) {
                     uiState.activeTurnSteps.forEach { stepRec ->
                         val isRunning = stepRec.status == "RUNNING"
-                        val catColor = accentColorForCategory(stepRec.category)
+                        val catColor = accentColorForCategory(stepRec.category, isDark)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF1B2030))
+                                .background(stepRowBg)
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -709,7 +719,7 @@ private fun LiveAgentExecutionBanner(
                                 Text(
                                     text = stepRec.displayTitle,
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
+                                    color = primaryText,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -723,7 +733,7 @@ private fun LiveAgentExecutionBanner(
                                     Text(
                                         text = "${stepRec.durationMs} ms",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White.copy(alpha = 0.6f)
+                                        color = primaryText.copy(alpha = 0.6f)
                                     )
                                 }
                             }
@@ -823,11 +833,15 @@ private fun ThinkingTraceCard(
     record: ToolExecutionRecord,
     isGerman: Boolean
 ) {
+    val isDark = isSystemInDarkTheme()
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val accentPurple = Color(0xFFB388FF)
+    val accentPurple = if (isDark) Color(0xFFB388FF) else Color(0xFF673AB7)
+    val cardBg = if (isDark) Color(0xFF1A1726) else Color(0xFFF3EEFF)
+    val titleColor = if (isDark) Color(0xFFEDE7F6) else Color(0xFF2D1B4E)
+    val previewColor = if (isDark) Color(0xFFD1C4E9).copy(alpha = 0.78f) else Color(0xFF4A3570)
 
     Surface(
-        color = Color(0xFF1A1726),
+        color = cardBg,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, accentPurple.copy(alpha = if (expanded) 0.55f else 0.28f)),
         modifier = Modifier
@@ -873,7 +887,7 @@ private fun ThinkingTraceCard(
                                 text = if (isGerman) "Gedankengang" else "Model Reasoning",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFEDE7F6)
+                                color = titleColor
                             )
                             if (record.durationMs > 0L) {
                                 Text(
@@ -887,7 +901,7 @@ private fun ThinkingTraceCard(
                             Text(
                                 text = record.resultSummary.replace("\n", " ").trim(),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFD1C4E9).copy(alpha = 0.78f),
+                                color = previewColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -915,7 +929,7 @@ private fun ThinkingTraceCard(
                 Text(
                     text = record.resultSummary,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFEDE7F6),
+                    color = titleColor,
                     lineHeight = 18.sp
                 )
             }
@@ -933,6 +947,11 @@ private fun ToolExecutionSection(
     records: List<ToolExecutionRecord>,
     isGerman: Boolean
 ) {
+    val isDark = isSystemInDarkTheme()
+    val pillBaseBg = if (isDark) Color(0xFF171C28) else Color(0xFFEEF2FA)
+    val inspectorBg = if (isDark) Color(0xFF141824) else Color(0xFFF3F6FC)
+    val primaryText = if (isDark) Color.White else Color(0xFF191C22)
+
     var selectedRecord by remember { mutableStateOf<ToolExecutionRecord?>(null) }
     var showFullTimeline by remember { mutableStateOf(false) }
 
@@ -949,13 +968,12 @@ private fun ToolExecutionSection(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Multi-step timeline toggle chip when more than 1 tool was used (or as a quick summary header)
             if (records.size > 1) {
                 Surface(
                     color = if (showFullTimeline) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
-                        Color(0xFF171C28)
+                        pillBaseBg
                     },
                     shape = RoundedCornerShape(50),
                     border = BorderStroke(
@@ -991,7 +1009,7 @@ private fun ToolExecutionSection(
                             color = if (showFullTimeline) {
                                 MaterialTheme.colorScheme.onPrimaryContainer
                             } else {
-                                Color.White
+                                primaryText
                             }
                         )
                         Icon(
@@ -1007,13 +1025,13 @@ private fun ToolExecutionSection(
             // Individual Tool Step Pills
             records.forEachIndexed { idx, record ->
                 val isSelected = !showFullTimeline && selectedRecord == record
-                val accent = accentColorForCategory(record.category)
+                val accent = accentColorForCategory(record.category, isDark)
 
                 Surface(
                     color = if (isSelected) {
                         accent.copy(alpha = 0.22f)
                     } else {
-                        Color(0xFF171C28)
+                        pillBaseBg
                     },
                     shape = RoundedCornerShape(50),
                     border = BorderStroke(
@@ -1059,7 +1077,7 @@ private fun ToolExecutionSection(
                             text = record.displayTitle,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Medium,
-                            color = Color.White,
+                            color = primaryText,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -1067,7 +1085,7 @@ private fun ToolExecutionSection(
                             imageVector = if (isSelected) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                             contentDescription = null,
                             modifier = Modifier.size(13.dp),
-                            tint = Color.White.copy(alpha = 0.7f)
+                            tint = primaryText.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -1087,7 +1105,7 @@ private fun ToolExecutionSection(
             exit = fadeOut() + shrinkVertically()
         ) {
             Surface(
-                color = Color(0xFF141824),
+                color = inspectorBg,
                 shape = RoundedCornerShape(18.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                 tonalElevation = 4.dp,
@@ -1123,7 +1141,7 @@ private fun ToolExecutionSection(
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = primaryText
                             )
                         }
 
@@ -1156,7 +1174,7 @@ private fun ToolExecutionSection(
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Close",
-                                    tint = Color.White.copy(alpha = 0.7f),
+                                    tint = primaryText.copy(alpha = 0.7f),
                                     modifier = Modifier.size(14.dp)
                                 )
                             }
@@ -1196,7 +1214,11 @@ private fun ToolStepDetailCard(
     isGerman: Boolean
 ) {
     val context = LocalContext.current
-    val accent = accentColorForCategory(record.category)
+    val isDark = isSystemInDarkTheme()
+    val accent = accentColorForCategory(record.category, isDark)
+    val subCardBg = if (isDark) Color(0xFF1B2030) else Color(0xFFE5ECF9)
+    val primaryText = if (isDark) Color.White else Color(0xFF191C22)
+    val monoColor = if (isDark) Color(0xFF90CAF9) else Color(0xFF0D47A1)
     var showRawJson by remember { mutableStateOf(false) }
 
     Column(
@@ -1246,7 +1268,7 @@ private fun ToolStepDetailCard(
                             text = record.displayTitle,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                            color = primaryText,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -1263,7 +1285,7 @@ private fun ToolStepDetailCard(
                     Text(
                         text = formatDurationShort(record.durationMs),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.65f)
+                        color = primaryText.copy(alpha = 0.65f)
                     )
                 }
             }
@@ -1272,7 +1294,7 @@ private fun ToolStepDetailCard(
         // "What it did" section
         if (record.whatItDid.isNotBlank()) {
             Surface(
-                color = Color(0xFF1B2030),
+                color = subCardBg,
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1307,14 +1329,14 @@ private fun ToolStepDetailCard(
                     Text(
                         text = record.whatItDid,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.92f)
+                        color = primaryText.copy(alpha = 0.92f)
                     )
                     if (showRawJson && record.rawArgumentsJson.isNotBlank()) {
                         Text(
                             text = record.rawArgumentsJson,
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
-                            color = Color(0xFF90CAF9),
+                            color = monoColor,
                             modifier = Modifier.padding(top = 2.dp)
                         )
                     }
@@ -1369,7 +1391,7 @@ private fun ToolStepDetailCard(
             }
             record.resultSummary.isNotBlank() -> {
                 Surface(
-                    color = Color(0xFF1B2030),
+                    color = subCardBg,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -1386,7 +1408,7 @@ private fun ToolStepDetailCard(
                         Text(
                             text = record.resultSummary,
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = primaryText.copy(alpha = 0.88f),
                             lineHeight = 18.sp
                         )
                     }
@@ -1402,6 +1424,14 @@ private fun DuckDuckGoResultCards(
     isGerman: Boolean,
     onOpenUrl: (String) -> Unit
 ) {
+    val isDark = isSystemInDarkTheme()
+    val subCardBg = if (isDark) Color(0xFF1B2030) else Color(0xFFE5ECF9)
+    val instantBg = if (isDark) Color(0xFF162938) else Color(0xFFE1F3FE)
+    val webAccent = if (isDark) Color(0xFF4FC3F7) else Color(0xFF0277BD)
+    val greenAccent = if (isDark) Color(0xFF81C784) else Color(0xFF2E7D32)
+    val linkColor = if (isDark) Color(0xFF90CAF9) else Color(0xFF1565C0)
+    val primaryText = if (isDark) Color.White else Color(0xFF191C22)
+
     val instant = resultJson.optString("instant_answer", "").trim()
     val resultsArr = resultJson.optJSONArray("results")
     val pagesArr = resultJson.optJSONArray("pages")
@@ -1411,7 +1441,7 @@ private fun DuckDuckGoResultCards(
             Text(
                 text = if (isGerman) "Gelesene Webseiten (${pagesArr.length()})" else "Extracted Websites (${pagesArr.length()})",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF81C784),
+                color = greenAccent,
                 fontWeight = FontWeight.SemiBold
             )
             for (i in 0 until pagesArr.length()) {
@@ -1427,15 +1457,15 @@ private fun DuckDuckGoResultCards(
         Text(
             text = if (isGerman) "Gefundene Web-Ergebnisse" else "Web Search Grounding Results",
             style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFF4FC3F7),
+            color = webAccent,
             fontWeight = FontWeight.SemiBold
         )
 
         if (instant.isNotBlank()) {
             Surface(
-                color = Color(0xFF162938),
+                color = instantBg,
                 shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, Color(0xFF4FC3F7).copy(alpha = 0.4f)),
+                border = BorderStroke(1.dp, webAccent.copy(alpha = 0.4f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1443,12 +1473,12 @@ private fun DuckDuckGoResultCards(
                         text = if (isGerman) "Direktantwort" else "Instant Answer",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF4FC3F7)
+                        color = webAccent
                     )
                     Text(
                         text = instant,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.White
+                        color = primaryText
                     )
                 }
             }
@@ -1464,7 +1494,7 @@ private fun DuckDuckGoResultCards(
                     .ifBlank { runCatching { Uri.parse(url).host?.removePrefix("www.") ?: "" }.getOrDefault("") }
 
                 Surface(
-                    color = Color(0xFF1B2030),
+                    color = subCardBg,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1484,7 +1514,7 @@ private fun DuckDuckGoResultCards(
                                 text = "${i + 1}. $title",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF90CAF9),
+                                color = linkColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
@@ -1493,7 +1523,7 @@ private fun DuckDuckGoResultCards(
                                 Text(
                                     text = domain,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha = 0.55f),
+                                    color = primaryText.copy(alpha = 0.55f),
                                     modifier = Modifier.padding(start = 6.dp)
                                 )
                             }
@@ -1502,7 +1532,7 @@ private fun DuckDuckGoResultCards(
                             Text(
                                 text = snippet,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.82f),
+                                color = primaryText.copy(alpha = 0.85f),
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -1547,12 +1577,17 @@ private fun SingleWebsiteResultCard(
     isGerman: Boolean,
     onOpenUrl: (String) -> Unit
 ) {
+    val isDark = isSystemInDarkTheme()
+    val subCardBg = if (isDark) Color(0xFF1B2030) else Color(0xFFE5ECF9)
+    val webAccent = if (isDark) Color(0xFF4FC3F7) else Color(0xFF0277BD)
+    val primaryText = if (isDark) Color.White else Color(0xFF191C22)
+
     val title = resultJson.optString("title", "")
     val url = resultJson.optString("url", "")
     val content = resultJson.optString("content", "").take(900)
 
     Surface(
-        color = Color(0xFF1B2030),
+        color = subCardBg,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -1572,7 +1607,7 @@ private fun SingleWebsiteResultCard(
                     text = title.ifBlank { if (isGerman) "Gelesene Webseite" else "Extracted Webpage" },
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF4FC3F7),
+                    color = webAccent,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -1580,7 +1615,7 @@ private fun SingleWebsiteResultCard(
                 Icon(
                     imageVector = Icons.Default.OpenInNew,
                     contentDescription = null,
-                    tint = Color(0xFF4FC3F7),
+                    tint = webAccent,
                     modifier = Modifier.size(14.dp)
                 )
             }
@@ -1588,7 +1623,7 @@ private fun SingleWebsiteResultCard(
                 Text(
                     text = content,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.85f),
+                    color = primaryText.copy(alpha = 0.85f),
                     maxLines = 6,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1602,6 +1637,7 @@ private fun DeviceStatusTelemetryChips(
     resultJson: JSONObject,
     isGerman: Boolean
 ) {
+    val isDark = isSystemInDarkTheme()
     val battery = resultJson.optInt("battery_percent", -1)
     val charging = resultJson.optBoolean("is_charging", false)
     val musicVol = resultJson.optInt("music_volume_percent", -1)
@@ -1617,20 +1653,24 @@ private fun DeviceStatusTelemetryChips(
             TelemetryMiniChip(
                 icon = if (charging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryStd,
                 label = if (isGerman) "Akku $battery%" else "Battery $battery%",
-                color = Color(0xFF81C784)
+                color = if (isDark) Color(0xFF81C784) else Color(0xFF2E7D32)
             )
         }
         if (musicVol >= 0) {
             TelemetryMiniChip(
                 icon = Icons.AutoMirrored.Filled.VolumeUp,
                 label = if (isGerman) "Medien $musicVol%" else "Media $musicVol%",
-                color = Color(0xFF64B5F6)
+                color = if (isDark) Color(0xFF64B5F6) else Color(0xFF1565C0)
             )
         }
         TelemetryMiniChip(
             icon = Icons.Default.FlashlightOn,
             label = if (isGerman) "Licht ${if (torch) "EIN" else "AUS"}" else "Torch ${if (torch) "ON" else "OFF"}",
-            color = if (torch) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.6f)
+            color = if (torch) {
+                if (isDark) Color(0xFFFFD54F) else Color(0xFFF57F17)
+            } else {
+                if (isDark) Color.White.copy(alpha = 0.6f) else Color(0xFF546E7A)
+            }
         )
     }
 }
@@ -1641,8 +1681,12 @@ private fun TelemetryMiniChip(
     label: String,
     color: Color
 ) {
+    val isDark = isSystemInDarkTheme()
+    val chipBg = if (isDark) Color(0xFF1B2030) else Color(0xFFE5ECF9)
+    val textColor = if (isDark) Color.White else Color(0xFF191C22)
+
     Surface(
-        color = Color(0xFF1B2030),
+        color = chipBg,
         shape = RoundedCornerShape(50),
         border = BorderStroke(1.dp, color.copy(alpha = 0.35f))
     ) {
@@ -1652,14 +1696,15 @@ private fun TelemetryMiniChip(
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Icon(imageVector = icon, contentDescription = null, tint = color, modifier = Modifier.size(13.dp))
-            Text(text = label, style = MaterialTheme.typography.labelSmall, color = Color.White)
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = textColor)
         }
     }
 }
 
 @Composable
 private fun CategoryBadgePill(category: String) {
-    val accent = accentColorForCategory(category)
+    val isDark = isSystemInDarkTheme()
+    val accent = accentColorForCategory(category, isDark)
     val label = when (category.uppercase(Locale.ROOT)) {
         "ANDROID" -> "ANDROID"
         "WEB" -> "WEB"
@@ -1685,15 +1730,27 @@ private fun CategoryBadgePill(category: String) {
     }
 }
 
-private fun accentColorForCategory(category: String): Color {
-    return when (category.uppercase(Locale.ROOT)) {
-        "ANDROID" -> Color(0xFF81C784) // Soft Emerald Green
-        "WEB" -> Color(0xFF4FC3F7)     // Light Blue
-        "MEMORY" -> Color(0xFFFFB74D)  // Warm Amber
-        "API_MCP" -> Color(0xFFCE93D8) // Orchid / API MCP Accent
-        "MCP" -> Color(0xFF9FA8DA)     // Indigo MCP Accent
-        "THINKING" -> Color(0xFFB388FF)
-        else -> Color(0xFF90CAF9)
+private fun accentColorForCategory(category: String, isDark: Boolean = true): Color {
+    return if (isDark) {
+        when (category.uppercase(Locale.ROOT)) {
+            "ANDROID" -> Color(0xFF81C784)
+            "WEB" -> Color(0xFF4FC3F7)
+            "MEMORY" -> Color(0xFFFFB74D)
+            "API_MCP" -> Color(0xFFCE93D8)
+            "MCP" -> Color(0xFF9FA8DA)
+            "THINKING" -> Color(0xFFB388FF)
+            else -> Color(0xFF90CAF9)
+        }
+    } else {
+        when (category.uppercase(Locale.ROOT)) {
+            "ANDROID" -> Color(0xFF2E7D32)
+            "WEB" -> Color(0xFF0277BD)
+            "MEMORY" -> Color(0xFFE65100)
+            "API_MCP" -> Color(0xFF7B1FA2)
+            "MCP" -> Color(0xFF3949AB)
+            "THINKING" -> Color(0xFF673AB7)
+            else -> Color(0xFF1565C0)
+        }
     }
 }
 
