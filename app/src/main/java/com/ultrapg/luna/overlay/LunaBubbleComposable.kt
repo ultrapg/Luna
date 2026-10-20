@@ -353,8 +353,9 @@ fun LunaSidePillOverlay(
     )
 
     val scale = settings.bubbleScale.coerceIn(0.70f, 1.40f)
-    val isActive = (liveState.isExpanded || liveState.phase != AssistantOverlayPhase.IDLE_NOTCH) &&
-        !liveState.isDismissing
+    val isActive = liveState.isExpanded ||
+        liveState.phase != AssistantOverlayPhase.IDLE_NOTCH ||
+        (liveState.isDismissing && !settings.bubbleKeepAliveDock)
 
     val styleWidthFactor = when (settings.bubbleStyle) {
         BubbleStyle.MINIMAL_BLADE -> 0.72f
@@ -362,34 +363,17 @@ fun LunaSidePillOverlay(
         else -> 1.0f
     }
 
-    val audioBreathW = if (isAnimated) (smoothedAudio * 3.2f) else 0f
-    val audioBreathH = if (isAnimated) (smoothedAudio * 8.5f) else 0f
+    val targetWidth = if (isActive) {
+        ((settings.bubbleExpandedWidthDp.coerceIn(24, 54) * styleWidthFactor) * scale).dp
+    } else {
+        ((settings.bubbleWidthDp.coerceIn(20, 48) * styleWidthFactor) * scale).dp
+    }
 
-    val targetWidth by animateDpAsState(
-        targetValue = if (isActive) {
-            ((settings.bubbleExpandedWidthDp.coerceIn(24, 54) * styleWidthFactor + audioBreathW) * scale).dp
-        } else {
-            ((settings.bubbleWidthDp.coerceIn(20, 48) * styleWidthFactor) * scale).dp
-        },
-        animationSpec = spring(
-            dampingRatio = 0.72f,
-            stiffness = 400f
-        ),
-        label = "notchW"
-    )
-
-    val targetHeight by animateDpAsState(
-        targetValue = if (isActive) {
-            ((settings.bubbleExpandedHeightDp.coerceIn(88, 220) + audioBreathH) * scale).dp
-        } else {
-            (settings.bubbleHeightDp.coerceIn(72, 180) * scale).dp
-        },
-        animationSpec = spring(
-            dampingRatio = 0.70f,
-            stiffness = 360f
-        ),
-        label = "notchH"
-    )
+    val targetHeight = if (isActive) {
+        (settings.bubbleExpandedHeightDp.coerceIn(88, 220) * scale).dp
+    } else {
+        (settings.bubbleHeightDp.coerceIn(72, 180) * scale).dp
+    }
 
     val cornerRadius = when (settings.bubbleStyle) {
         BubbleStyle.MINIMAL_BLADE -> 12.dp

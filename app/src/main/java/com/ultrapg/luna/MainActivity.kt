@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import com.ultrapg.luna.assistant.AssistantRoleHelper
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
+import com.ultrapg.luna.core.speech.LunaTtsEngine
 import com.ultrapg.luna.ui.screens.AiSettingsScreen
 import com.ultrapg.luna.ui.screens.ChatsScreen
 import com.ultrapg.luna.ui.screens.ModelsScreen
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         LunaSettingsRepository.init(applicationContext)
+        volumeControlStream = LunaTtsEngine.getInstance(applicationContext).getPreferredVolumeControlStream()
 
         setContent {
             LunaTheme {

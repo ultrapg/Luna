@@ -631,6 +631,8 @@ object LunaAgentTools {
             "ring", "ringtone" -> AudioManager.STREAM_RING
             "alarm" -> AudioManager.STREAM_ALARM
             "notification" -> AudioManager.STREAM_NOTIFICATION
+            "assistant", "ai", "voice", "accessibility", "luna" ->
+                com.ultrapg.luna.core.speech.LunaTtsEngine.getInstance(context).getPreferredVolumeControlStream()
             else -> AudioManager.STREAM_MUSIC
         }
 

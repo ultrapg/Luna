@@ -163,6 +163,7 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
     @Suppress("DEPRECATION")
     private fun configureSessionWindowForLockScreen() {
         window?.window?.let { win ->
+            win.volumeControlStream = LunaTtsEngine.getInstance(context.applicationContext).getPreferredVolumeControlStream()
             win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             val params = win.attributes
             params.width = ViewGroup.LayoutParams.MATCH_PARENT
@@ -408,6 +409,7 @@ class AssistTrampolineActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = LunaTtsEngine.getInstance(applicationContext).getPreferredVolumeControlStream()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
