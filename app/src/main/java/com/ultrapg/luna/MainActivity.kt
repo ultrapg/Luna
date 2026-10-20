@@ -61,7 +61,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         LunaSettingsRepository.init(applicationContext)
-        volumeControlStream = LunaTtsEngine.getInstance(applicationContext).getPreferredVolumeControlStream()
+        runCatching {
+            volumeControlStream = LunaTtsEngine.getInstance(applicationContext).getPreferredVolumeControlStream()
+        }
 
         setContent {
             LunaTheme {

@@ -142,16 +142,26 @@ class LunaTtsEngine private constructor(context: Context) {
     private val _outputWaveBands = MutableStateFlow(floatArrayOf(0.1f, 0.1f, 0.1f, 0.1f, 0.1f))
     val outputWaveBands: StateFlow<FloatArray> = _outputWaveBands.asStateFlow()
 
-    private val assistantSpeechAttributes: AudioAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_ASSISTANT)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .build()
+    private val assistantSpeechAttributes: AudioAttributes = runCatching {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }.getOrElse {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }
 
-    private val accessibilitySpeechAttributes: AudioAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .setLegacyStreamType(AudioManager.STREAM_ACCESSIBILITY)
-        .build()
+    private val accessibilitySpeechAttributes: AudioAttributes = runCatching {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }.getOrElse {
+        assistantSpeechAttributes
+    }
 
     data class AssistantAudioConfig(
         val attributes: AudioAttributes,
@@ -168,22 +178,31 @@ class LunaTtsEngine private constructor(context: Context) {
      *   even when Media audio (`STREAM_MUSIC`) is muted or turned down!
      */
     fun resolveAssistantAudioConfig(): AssistantAudioConfig {
-        val assistantStream = runCatching {
-            assistantSpeechAttributes.volumeControlStream
-        }.getOrDefault(AudioManager.STREAM_MUSIC)
+        return runCatching {
+            val assistantStream = runCatching {
+                assistantSpeechAttributes.volumeControlStream
+            }.getOrDefault(AudioManager.STREAM_MUSIC)
 
-        return if (assistantStream != AudioManager.STREAM_MUSIC &&
-            assistantStream != AudioManager.USE_DEFAULT_STREAM_TYPE &&
-            assistantStream >= 0
-        ) {
-            AssistantAudioConfig(assistantSpeechAttributes, assistantStream)
-        } else {
-            AssistantAudioConfig(accessibilitySpeechAttributes, AudioManager.STREAM_ACCESSIBILITY)
+            if (assistantStream != AudioManager.STREAM_MUSIC &&
+                assistantStream != AudioManager.USE_DEFAULT_STREAM_TYPE &&
+                assistantStream >= 0
+            ) {
+                AssistantAudioConfig(assistantSpeechAttributes, assistantStream)
+            } else {
+                val accessStream = runCatching {
+                    accessibilitySpeechAttributes.volumeControlStream
+                }.getOrDefault(AudioManager.STREAM_ACCESSIBILITY)
+                AssistantAudioConfig(accessibilitySpeechAttributes, accessStream)
+            }
+        }.getOrElse {
+            AssistantAudioConfig(assistantSpeechAttributes, AudioManager.STREAM_ACCESSIBILITY)
         }
     }
 
     fun getPreferredVolumeControlStream(): Int {
-        return resolveAssistantAudioConfig().streamType
+        return runCatching {
+            resolveAssistantAudioConfig().streamType
+        }.getOrDefault(AudioManager.STREAM_ACCESSIBILITY)
     }
 
     init {
@@ -958,7 +977,7 @@ class LunaTtsEngine private constructor(context: Context) {
             if (!isActive) return@withContext false
             val wavFile = File(appContext.cacheDir, "luna_tts_${UUID.randomUUID()}.wav")
             try {
-                val audioConfig = configureAndroidTtsLanguage(tts, primaryLocale, fallbackLocale, voiceCandidate, settings)
+                configureAndroidTtsLanguage(tts, primaryLocale, fallbackLocale, voiceCandidate, settings)
 
                 val utteranceId = "wav_${UUID.randomUUID()}"
                 val deferred = CompletableDeferred<Boolean>()
@@ -966,7 +985,6 @@ class LunaTtsEngine private constructor(context: Context) {
 
                 val params = Bundle().apply {
                     putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-                    putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, audioConfig.streamType)
                 }
 
                 val callRes = runCatching {
@@ -1094,10 +1112,9 @@ class LunaTtsEngine private constructor(context: Context) {
         utteranceWaiters[utteranceId] = deferred
 
         val started = runCatching {
-            val audioConfig = configureAndroidTtsLanguage(tts, primaryLocale, fallbackLocale, preferredVoice = null, settings = settings)
+            configureAndroidTtsLanguage(tts, primaryLocale, fallbackLocale, preferredVoice = null, settings = settings)
             val params = Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-                putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, audioConfig.streamType)
             }
             val res = tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
             res == TextToSpeech.SUCCESS

@@ -16,7 +16,9 @@ class LunaApp : Application() {
         LunaDatabase.getInstance(this)
         NpuHardwareManager.detectHardwareProfile(this)
         // Warm up TTS engine immediately on the main thread
-        LunaTtsEngine.getInstance(this)
+        runCatching {
+            LunaTtsEngine.getInstance(this)
+        }
         // Clean up legacy notification channel so the status bar star icon never appears
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             runCatching {
