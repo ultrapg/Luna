@@ -1,6 +1,9 @@
 package com.ultrapg.luna.ui.screens
 
+import android.os.Build
 import android.provider.Settings
+import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -17,15 +20,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import com.ultrapg.luna.assistant.AssistantLiveState
 import com.ultrapg.luna.assistant.AssistantOverlayPhase
 import com.ultrapg.luna.assistant.AssistantRoleHelper
@@ -34,6 +41,7 @@ import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.overlay.GeminiSidePillOverlay
 import com.ultrapg.luna.overlay.LunaOverlayService
 import com.ultrapg.luna.overlay.LunaOverlayWindowManager
+import com.ultrapg.luna.overlay.LunaScreenMetrics
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -441,19 +449,46 @@ fun OverlayConfigScreen(
                 decorFitsSystemWindows = false
             )
         ) {
-            var fullScreenHeightPx by remember {
-                mutableIntStateOf(context.resources.displayMetrics.heightPixels.coerceAtLeast(1))
+            val dialogView = LocalView.current
+            SideEffect {
+                val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+                dialogWindow?.let { win ->
+                    win.setLayout(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    val params = win.attributes
+                    params.flags = params.flags or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        params.layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                        params.fitInsetsTypes = 0
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        params.layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                    win.attributes = params
+                }
             }
+
+            val realScreenHeightPx = remember(context) {
+                LunaScreenMetrics.getRealScreenHeightPx(context).coerceAtLeast(1)
+            }
+            var calibratorTopOnScreenPx by remember { mutableIntStateOf(0) }
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color(0xE607090E))
-                    .onSizeChanged { fullScreenHeightPx = it.height.coerceAtLeast(1) }
+                    .onGloballyPositioned { coords ->
+                        calibratorTopOnScreenPx = coords.positionOnScreen().y.roundToInt()
+                    }
                     .pointerInput(Unit) {
                         detectDragGestures { change, dragAmount ->
                             change.consume()
-                            val newFrac = (settings.bubbleVerticalFraction + (dragAmount.y / fullScreenHeightPx.toFloat()))
+                            val newFrac = (settings.bubbleVerticalFraction + (dragAmount.y / realScreenHeightPx.toFloat()))
                                 .coerceIn(0.04f, 0.88f)
                             var newEdge = settings.bubbleEdge
                             if (dragAmount.x < -36f && settings.bubbleEdge == BubbleEdge.RIGHT) {
@@ -570,8 +605,12 @@ fun OverlayConfigScreen(
                     }
                 }
 
-                // Actual Vertical Side-Notch rendered at the exact real-world screen Y coordinate
-                val realYOffsetPx = (fullScreenHeightPx * settings.bubbleVerticalFraction).roundToInt()
+                // Actual Vertical Side-Notch rendered at the exact real-world physical screen Y coordinate
+                val targetScreenYPx = LunaScreenMetrics.computeTargetScreenYPx(
+                    context,
+                    settings.bubbleVerticalFraction
+                )
+                val realYOffsetPx = (targetScreenYPx - calibratorTopOnScreenPx).coerceAtLeast(0)
                 val edgeAlign = if (settings.bubbleEdge == BubbleEdge.LEFT) {
                     Alignment.TopStart
                 } else {
@@ -591,7 +630,7 @@ fun OverlayConfigScreen(
                         ttsRms = 0.62f,
                         isSpeaking = previewMode == 2,
                         onDragDelta = { dx, dy ->
-                            val newFrac = (settings.bubbleVerticalFraction + (dy / fullScreenHeightPx.toFloat()))
+                            val newFrac = (settings.bubbleVerticalFraction + (dy / realScreenHeightPx.toFloat()))
                                 .coerceIn(0.04f, 0.88f)
                             var newEdge = settings.bubbleEdge
                             if (dx < -40f && settings.bubbleEdge == BubbleEdge.RIGHT) {

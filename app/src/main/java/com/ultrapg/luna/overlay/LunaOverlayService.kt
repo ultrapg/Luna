@@ -79,7 +79,46 @@ class ComposeOverlayLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, SavedS
 }
 
 /**
- * Manages the floating horizontal Side-Notch overlay window across the system.
+ * Shared physical screen coordinate resolver so the Fullscreen Calibration view,
+ * `LunaOverlayWindowManager`, and `LunaVoiceInteractionSession` all map `bubbleVerticalFraction`
+ * to the exact same physical hardware pixel `Y` on the display glass.
+ */
+object LunaScreenMetrics {
+    fun getRealScreenSizePx(context: Context): Pair<Int, Int> {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (wm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = wm.maximumWindowMetrics.bounds
+            val w = bounds.width()
+            val h = bounds.height()
+            if (w > 0 && h > 0) {
+                return w to h
+            }
+        }
+        val dm = context.getSystemService(DisplayManager::class.java)
+        val display = dm?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            val realMetrics = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            display.getRealMetrics(realMetrics)
+            if (realMetrics.widthPixels > 0 && realMetrics.heightPixels > 0) {
+                return realMetrics.widthPixels to realMetrics.heightPixels
+            }
+        }
+        val fallback = context.resources.displayMetrics
+        return fallback.widthPixels.coerceAtLeast(1) to fallback.heightPixels.coerceAtLeast(1)
+    }
+
+    fun getRealScreenHeightPx(context: Context): Int = getRealScreenSizePx(context).second
+    fun getRealScreenWidthPx(context: Context): Int = getRealScreenSizePx(context).first
+
+    fun computeTargetScreenYPx(context: Context, verticalFraction: Float): Int {
+        val realHeight = getRealScreenHeightPx(context)
+        return (realHeight * verticalFraction.coerceIn(0.02f, 0.92f)).toInt()
+    }
+}
+
+/**
+ * Manages the floating Side-Notch overlay window across the system.
  * Uses a proper Android 11+ visual `WindowContext` + `ContextThemeWrapper` so `ComposeView`
  * and `WindowManager` never crash with `IllegalArgumentException` on Android 14/15 (`targetSdk = 35`).
  */
@@ -91,6 +130,7 @@ object LunaOverlayWindowManager {
     private var layoutParams: WindowManager.LayoutParams? = null
     private var lifecycleOwner: ComposeOverlayLifecycleOwner? = null
     private var horizontalDragAccumPx: Float = 0f
+    private var measuredWindowTopInsetPx: Int = 0
 
     fun canShowSystemOverlay(context: Context): Boolean {
         return LunaAccessibilityService.activeInstance != null || Settings.canDrawOverlays(context)
@@ -111,6 +151,39 @@ object LunaOverlayWindowManager {
             baseContext
         }
         return ContextThemeWrapper(rawVisualContext, R.style.Theme_Luna)
+    }
+
+    private fun configureWindowLayoutParams(
+        lp: WindowManager.LayoutParams,
+        context: Context
+    ) {
+        val settings = LunaSettingsRepository.current(context)
+        val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
+        val targetScreenY = LunaScreenMetrics.computeTargetScreenYPx(context, settings.bubbleVerticalFraction)
+
+        lp.gravity = when (settings.bubbleEdge) {
+            BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
+            BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
+            BubbleEdge.FREE -> Gravity.START or Gravity.TOP
+        }
+        lp.x = if (settings.bubbleEdge == BubbleEdge.FREE) {
+            (settings.bubbleOffsetXDp * density).toInt()
+        } else {
+            0
+        }
+        lp.y = (targetScreenY - measuredWindowTopInsetPx).coerceAtLeast(0)
+        lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            lp.fitInsetsTypes = 0
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
     }
 
     @Synchronized
@@ -137,9 +210,6 @@ object LunaOverlayWindowManager {
         }
 
         val wm = visualContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
-        val settings = LunaSettingsRepository.current(visualContext)
-        val screenHeight = visualContext.resources.displayMetrics.heightPixels
-        val density = visualContext.resources.displayMetrics.density
 
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -148,21 +218,11 @@ object LunaOverlayWindowManager {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = when (settings.bubbleEdge) {
-                BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
-                BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
-                BubbleEdge.FREE -> Gravity.START or Gravity.TOP
-            }
-            x = if (settings.bubbleEdge == BubbleEdge.FREE) {
-                (settings.bubbleOffsetXDp * density).toInt()
-            } else {
-                0
-            }
-            y = (screenHeight * settings.bubbleVerticalFraction).toInt()
-        }
+        )
+        configureWindowLayoutParams(lp, visualContext)
 
         val owner = ComposeOverlayLifecycleOwner().apply {
             performRestore(null)
@@ -176,7 +236,9 @@ object LunaOverlayWindowManager {
                 if (event?.action == MotionEvent.ACTION_OUTSIDE ||
                     event?.actionMasked == MotionEvent.ACTION_OUTSIDE
                 ) {
-                    LunaAssistantController.dismissOverlay(visualContext)
+                    if (!LunaAssistantController.shouldIgnoreOutsideTouch()) {
+                        LunaAssistantController.dismissOverlay(visualContext)
+                    }
                     return true
                 }
                 return super.onTouchEvent(event)
@@ -185,6 +247,17 @@ object LunaOverlayWindowManager {
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
+            addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+                val activeLp = this@LunaOverlayWindowManager.layoutParams ?: lp
+                val loc = IntArray(2)
+                v.getLocationOnScreen(loc)
+                val actualScreenY = loc[1]
+                val systemTopInset = actualScreenY - activeLp.y
+                if (systemTopInset != measuredWindowTopInsetPx && kotlin.math.abs(systemTopInset) in 1..280) {
+                    measuredWindowTopInsetPx = systemTopInset
+                    v.post { syncWindowPosition(visualContext) }
+                }
+            }
         }
 
         val compose = ComposeView(visualContext).apply {
@@ -206,7 +279,7 @@ object LunaOverlayWindowManager {
                     micWaveBands
                 }
 
-                if (liveState.isVisible) {
+                if (liveState.isVisible || liveState.isDismissing) {
                     GeminiSidePillOverlay(
                         liveState = liveState,
                         settings = curSettings,
@@ -245,35 +318,13 @@ object LunaOverlayWindowManager {
         val view = rootView ?: return
         val wm = windowManager ?: return
         val lp = layoutParams ?: return
-        val settings = LunaSettingsRepository.current(context)
-        val screenHeight = context.resources.displayMetrics.heightPixels
-        val density = context.resources.displayMetrics.density
-
-        lp.gravity = when (settings.bubbleEdge) {
-            BubbleEdge.RIGHT -> Gravity.END or Gravity.TOP
-            BubbleEdge.LEFT -> Gravity.START or Gravity.TOP
-            BubbleEdge.FREE -> Gravity.START or Gravity.TOP
-        }
-        lp.x = if (settings.bubbleEdge == BubbleEdge.FREE) {
-            (settings.bubbleOffsetXDp * density).toInt()
-        } else {
-            0
-        }
-        lp.y = (screenHeight * settings.bubbleVerticalFraction).toInt()
-
-        lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-
+        configureWindowLayoutParams(lp, context)
         runCatching { wm.updateViewLayout(view, lp) }
     }
 
     fun handleDragDelta(context: Context, dxPx: Float, dyPx: Float) {
-        val metrics = context.resources.displayMetrics
-        val screenHeight = metrics.heightPixels.coerceAtLeast(1)
-        val screenWidth = metrics.widthPixels.coerceAtLeast(1)
-        val density = metrics.density.coerceAtLeast(1f)
+        val (screenWidth, screenHeight) = LunaScreenMetrics.getRealScreenSizePx(context)
+        val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
         val screenWidthDp = (screenWidth / density).toInt().coerceAtLeast(240)
 
         horizontalDragAccumPx += dxPx
@@ -374,7 +425,7 @@ class LunaOverlayService : Service() {
 
         scope.launch {
             LunaAssistantController.liveState.collect { state ->
-                if (state.isVisible) {
+                if (state.isVisible || state.isDismissing) {
                     LunaOverlayWindowManager.ensureOverlayAttached(this@LunaOverlayService)
                     LunaOverlayWindowManager.syncWindowPosition(this@LunaOverlayService)
                 } else {

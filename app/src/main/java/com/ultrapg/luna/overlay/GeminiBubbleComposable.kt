@@ -10,14 +10,17 @@
 
 package com.ultrapg.luna.overlay
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -25,6 +28,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -32,7 +37,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +51,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -54,18 +66,20 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sin
 
-private val NotchDarkBg = Color(0xF5111318)
-private val NotchSubtleBorder = Color(0xFF282C37)
+// Material Design 3 dark surface container & accent tokens
+private val NotchDarkBg = Color(0xF513151B)
+private val NotchSubtleBorder = Color(0xFF2B303C)
 private val ListeningWhite = Color(0xFFE8EAED)
 private val SpeakingLightBlue = Color(0xFF7DC4FF)
 
 /**
- * Slim Vertical Side-Notch Bubble Overlay:
- * - Tall and slim (`~34dp x 136dp`), snapped flush against the left or right screen edge like a hardware side-button notch
- * - No status dot, no text, and no obvious buttons inside:
- *   - Listening: clean white vertical equalizer bars (`ListeningWhite`)
- *   - Thinking / Transcribing: white stretched pill-shaped loading symbol (`StretchedPillLoadingIndicator`)
- *   - Speaking: light-blue vertical equalizer visualizer bars (`SpeakingLightBlue`)
+ * Slim Vertical Side-Notch Bubble Overlay with Material Design 3 spatial physics:
+ * - Pops out from the screen edge with M3 spring physics when triggered
+ * - Reacts to voice/TTS amplitude, touch press, and drag with subtle M3 spring motion
+ * - Fades away and retracts smoothly into the screen edge after speaking or when dismissed
+ * - Listening: white vertical equalizer bars (`ListeningWhite`)
+ * - Thinking / Transcribing: white stretched pill-shaped loading symbol (`StretchedPillLoadingIndicator`)
+ * - Speaking: light-blue vertical equalizer visualizer bars (`SpeakingLightBlue`)
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -82,20 +96,51 @@ fun GeminiSidePillOverlay(
 ) {
     val context = LocalContext.current
 
+    // Entrance & exit state for M3 side-edge pop-out and fade-away
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        entered = true
+    }
+    LaunchedEffect(liveState.isVisible, liveState.isDismissing) {
+        if (liveState.isVisible && !liveState.isDismissing) {
+            entered = true
+        }
+    }
+
+    val isShown = entered && liveState.isVisible && !liveState.isDismissing
+    val presenceProgress by animateFloatAsState(
+        targetValue = if (isShown) 1f else 0f,
+        animationSpec = if (isShown) {
+            // M3 Spatial Spring: crisp pop-out from the hardware side edge
+            spring(
+                dampingRatio = 0.68f,
+                stiffness = 380f
+            )
+        } else {
+            // Smooth M3 fade-away and retract into the edge
+            tween(durationMillis = 250, easing = FastOutSlowInEasing)
+        },
+        label = "notchPresence"
+    )
+
     val isThinking = liveState.phase == AssistantOverlayPhase.THINKING ||
         liveState.phase == AssistantOverlayPhase.TRANSCRIBING
     val isSpeakingNow = liveState.phase == AssistantOverlayPhase.SPEAKING || isSpeaking
+    val isAnimated = liveState.phase == AssistantOverlayPhase.LISTENING || isSpeakingNow
 
     val rawLevel = when {
         liveState.phase == AssistantOverlayPhase.LISTENING -> max(micRms, 0.16f)
         isSpeakingNow -> max(ttsRms, 0.24f)
-        isThinking -> 0.40f
+        isThinking -> 0.36f
         else -> 0.06f
     }
 
     val smoothedAudio by animateFloatAsState(
         targetValue = rawLevel.coerceIn(0.05f, 1.0f),
-        animationSpec = tween(durationMillis = 70, easing = FastOutSlowInEasing),
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "verticalNotchAudio"
     )
 
@@ -104,7 +149,7 @@ fun GeminiSidePillOverlay(
         initialValue = 0f,
         targetValue = (2f * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 820, easing = LinearEasing),
+            animation = tween(durationMillis = 780, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "wavePhase"
@@ -120,26 +165,59 @@ fun GeminiSidePillOverlay(
         label = "thinkingPillProgress"
     )
 
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    var dragVelocityY by remember { mutableFloatStateOf(0f) }
+
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.93f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.62f,
+            stiffness = 520f
+        ),
+        label = "notchPressScale"
+    )
+
+    val dragStretchY by animateFloatAsState(
+        targetValue = (1f + (abs(dragVelocityY) / 1400f).coerceIn(0f, 0.09f)),
+        animationSpec = spring(
+            dampingRatio = 0.65f,
+            stiffness = 400f
+        ),
+        label = "notchDragStretch"
+    )
+
     val scale = settings.bubbleScale.coerceIn(0.70f, 1.40f)
-    val isActive = liveState.isExpanded || liveState.phase != AssistantOverlayPhase.IDLE_NOTCH
+    val isActive = (liveState.isExpanded || liveState.phase != AssistantOverlayPhase.IDLE_NOTCH) &&
+        !liveState.isDismissing
+
+    // Subtle M3 audio-reactive breathing on the pill dimensions while listening or speaking
+    val audioBreathW = if (isAnimated) (smoothedAudio * 3.2f) else 0f
+    val audioBreathH = if (isAnimated) (smoothedAudio * 8.5f) else 0f
 
     val targetWidth by animateDpAsState(
         targetValue = if (isActive) {
-            (settings.bubbleExpandedWidthDp.coerceIn(24, 54) * scale).dp
+            ((settings.bubbleExpandedWidthDp.coerceIn(24, 54) + audioBreathW) * scale).dp
         } else {
             (settings.bubbleWidthDp.coerceIn(20, 48) * scale).dp
         },
-        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+        animationSpec = spring(
+            dampingRatio = 0.72f,
+            stiffness = 400f
+        ),
         label = "notchW"
     )
 
     val targetHeight by animateDpAsState(
         targetValue = if (isActive) {
-            (settings.bubbleExpandedHeightDp.coerceIn(88, 220) * scale).dp
+            ((settings.bubbleExpandedHeightDp.coerceIn(88, 220) + audioBreathH) * scale).dp
         } else {
             (settings.bubbleHeightDp.coerceIn(72, 180) * scale).dp
         },
-        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+        animationSpec = spring(
+            dampingRatio = 0.70f,
+            stiffness = 360f
+        ),
         label = "notchH"
     )
 
@@ -160,24 +238,54 @@ fun GeminiSidePillOverlay(
         BubbleEdge.FREE -> RoundedCornerShape(percent = 50)
     }
 
-    val isAnimated = liveState.phase == AssistantOverlayPhase.LISTENING || isSpeakingNow
-    val barColor = if (isSpeakingNow) SpeakingLightBlue else ListeningWhite
+    val barColor by animateColorAsState(
+        targetValue = if (isSpeakingNow) SpeakingLightBlue else ListeningWhite,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "barColorTransition"
+    )
+
+    val edgeOrigin = when (settings.bubbleEdge) {
+        BubbleEdge.RIGHT -> TransformOrigin(1f, 0.5f)
+        BubbleEdge.LEFT -> TransformOrigin(0f, 0.5f)
+        BubbleEdge.FREE -> TransformOrigin(0.5f, 0.5f)
+    }
 
     Box(
         modifier = Modifier
             .width(targetWidth)
             .height(targetHeight)
+            .graphicsLayer {
+                transformOrigin = edgeOrigin
+                val clampedAlpha = presenceProgress.coerceIn(0f, 1f)
+                alpha = clampedAlpha
+                val slideSign = when (settings.bubbleEdge) {
+                    BubbleEdge.RIGHT -> 1f
+                    BubbleEdge.LEFT -> -1f
+                    BubbleEdge.FREE -> 0f
+                }
+                // Pop out from the screen edge on appear, retract into the screen edge on dismiss
+                translationX = (1f - presenceProgress) * size.width * 0.95f * slideSign
+                scaleX = (0.76f + 0.24f * presenceProgress) * pressScale
+                scaleY = (0.80f + 0.20f * presenceProgress) * pressScale * dragStretchY
+            }
             .shadow(elevation = 10.dp, shape = notchShape, clip = false)
             .clip(notchShape)
             .background(NotchDarkBg)
             .border(width = 1.dp, color = NotchSubtleBorder, shape = notchShape)
             .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onDragDelta(dragAmount.x, dragAmount.y)
-                }
+                detectDragGestures(
+                    onDragEnd = { dragVelocityY = 0f },
+                    onDragCancel = { dragVelocityY = 0f },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        dragVelocityY = dragAmount.y * 12f
+                        onDragDelta(dragAmount.x, dragAmount.y)
+                    }
+                )
             }
             .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
                 onClick = {
                     if (!isActive) {
                         onToggleExpand()
@@ -287,7 +395,7 @@ private fun VerticalEqualizerBars(
         val totalSpan = size.height
         val step = totalSpan / (count + 1)
         val cx = size.width / 2f
-        val maxBarWidth = size.width * 0.78f
+        val maxBarWidth = size.width * 0.80f
         val minDotWidth = 3.2.dp.toPx()
 
         for (i in 0 until count) {
@@ -297,12 +405,12 @@ private fun VerticalEqualizerBars(
             val bandEnergy = if (waveBands.isNotEmpty()) waveBands[bandIdx] else audioAmplitude
 
             val waveFactor = if (isAnimated) {
-                val osc = 0.50f + 0.50f * abs(sin(phase + i * 0.55f)).toFloat()
-                val dynamic = (0.35f + (audioAmplitude * 0.55f + bandEnergy * 0.45f) * 0.95f)
-                    .coerceIn(0.28f, 1.25f)
+                val osc = 0.46f + 0.54f * abs(sin(phase + i * 0.58f)).toFloat()
+                val dynamic = (0.32f + (audioAmplitude * 0.55f + bandEnergy * 0.50f) * 1.02f)
+                    .coerceIn(0.28f, 1.28f)
                 base * osc * dynamic
             } else {
-                base * 0.45f
+                base * 0.40f
             }
 
             val barW = (minDotWidth + maxBarWidth * waveFactor).coerceIn(minDotWidth, maxBarWidth)

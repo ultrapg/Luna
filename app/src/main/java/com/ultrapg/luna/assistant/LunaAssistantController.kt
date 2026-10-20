@@ -11,6 +11,7 @@
 package com.ultrapg.luna.assistant
 
 import android.content.Context
+import android.os.SystemClock
 import android.os.Vibrator
 import android.util.Log
 import com.ultrapg.luna.core.database.ChatMessageEntity
@@ -43,6 +44,7 @@ enum class AssistantOverlayPhase {
 
 data class AssistantLiveState(
     val isVisible: Boolean = false,
+    val isDismissing: Boolean = false,
     val isExpanded: Boolean = false,
     val phase: AssistantOverlayPhase = AssistantOverlayPhase.IDLE_NOTCH,
     val activeSessionId: Long? = null,
@@ -72,6 +74,43 @@ object LunaAssistantController {
     val liveState: StateFlow<AssistantLiveState> = _liveState.asStateFlow()
 
     private var activeTurnJob: Job? = null
+    private var dismissAnimationJob: Job? = null
+
+    @Volatile
+    private var lastExternalActivityLaunchMs: Long = 0L
+
+    /**
+     * Called when an Android action tool (`open_app`, `open_system_settings`, `set_alarm_or_timer`)
+     * starts an external Activity so the bubble overlay stays visible across the activity transition
+     * and finishes speaking its response.
+     */
+    fun notifyExternalActivityLaunched(context: Context) {
+        val appContext = context.applicationContext
+        lastExternalActivityLaunchMs = SystemClock.elapsedRealtime()
+        scope.launch {
+            for (waitMs in longArrayOf(100L, 280L, 550L)) {
+                delay(waitMs)
+                if (_liveState.value.isVisible && !_liveState.value.isDismissing) {
+                    if (LunaOverlayWindowManager.canShowSystemOverlay(appContext)) {
+                        LunaOverlayWindowManager.ensureOverlayAttached(appContext)
+                        LunaOverlayWindowManager.syncWindowPosition(appContext)
+                    } else {
+                        LunaVoiceInteractionSession.ensureSessionShownForActiveTurn()
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns true during the brief window (~800ms) right after Luna launches an external app
+     * so synthetic `ACTION_OUTSIDE` focus events from Android's activity transition don't prematurely
+     * dismiss the bubble while Luna still has something to say.
+     */
+    fun shouldIgnoreOutsideTouch(): Boolean {
+        val elapsed = SystemClock.elapsedRealtime() - lastExternalActivityLaunchMs
+        return elapsed in 0L..800L
+    }
 
     fun selectSession(sessionId: Long?) {
         _liveState.value = _liveState.value.copy(activeSessionId = sessionId)
@@ -113,8 +152,11 @@ object LunaAssistantController {
         LunaSettingsRepository.init(appContext)
         hapticPulse(appContext)
 
+        dismissAnimationJob?.cancel()
+        dismissAnimationJob = null
+
         val current = _liveState.value
-        if (current.isVisible && current.phase == AssistantOverlayPhase.LISTENING) {
+        if (current.isVisible && !current.isDismissing && current.phase == AssistantOverlayPhase.LISTENING) {
             finishListeningAndProcess(appContext)
             return
         }
@@ -122,6 +164,7 @@ object LunaAssistantController {
         LunaTtsEngine.getInstance(appContext).stopSpeaking()
         _liveState.value = current.copy(
             isVisible = true,
+            isDismissing = false,
             isExpanded = true,
             phase = if (startListeningImmediately) AssistantOverlayPhase.LISTENING else AssistantOverlayPhase.IDLE_NOTCH,
             userTranscript = "",
@@ -138,16 +181,19 @@ object LunaAssistantController {
     fun showCollapsedNotch(context: Context) {
         val appContext = context.applicationContext
         LunaSettingsRepository.init(appContext)
+        dismissAnimationJob?.cancel()
+        dismissAnimationJob = null
         _liveState.value = _liveState.value.copy(
             isVisible = true,
+            isDismissing = false,
             isExpanded = false,
             phase = AssistantOverlayPhase.IDLE_NOTCH
         )
     }
 
     /**
-     * Immediately stops all recording, thinking, and TTS playback, and hides the bubble overlay.
-     * Invoked when the user taps anywhere outside the bubble on the screen or long-presses the bubble.
+     * Stops all recording, thinking, and TTS playback immediately, and plays the smooth
+     * Material 3 fade-away + edge-retract animation before detaching the overlay window.
      */
     fun dismissOverlay(context: Context) {
         val appContext = context.applicationContext
@@ -158,13 +204,40 @@ object LunaAssistantController {
         }
         LunaTtsEngine.getInstance(appContext).stopSpeaking()
         val keepDock = LunaSettingsRepository.current(appContext).bubbleKeepAliveDock
+        if (keepDock) {
+            dismissAnimationJob?.cancel()
+            _liveState.value = _liveState.value.copy(
+                isVisible = true,
+                isDismissing = false,
+                isExpanded = false,
+                phase = AssistantOverlayPhase.IDLE_NOTCH,
+                statusBadge = ""
+            )
+            return
+        }
+
+        if (!_liveState.value.isVisible) {
+            LunaOverlayWindowManager.detachOverlay()
+            return
+        }
+
         _liveState.value = _liveState.value.copy(
-            isVisible = keepDock,
+            isVisible = true,
+            isDismissing = true,
             isExpanded = false,
             phase = AssistantOverlayPhase.IDLE_NOTCH,
             statusBadge = ""
         )
-        if (!keepDock) {
+        dismissAnimationJob?.cancel()
+        dismissAnimationJob = scope.launch {
+            delay(280L)
+            _liveState.value = _liveState.value.copy(
+                isVisible = false,
+                isDismissing = false,
+                isExpanded = false,
+                phase = AssistantOverlayPhase.IDLE_NOTCH,
+                statusBadge = ""
+            )
             LunaOverlayWindowManager.detachOverlay()
         }
     }
@@ -423,7 +496,8 @@ object LunaAssistantController {
                 statusBadge = ""
             )
             if (_liveState.value.isVisible) {
-                delay(200)
+                // Natural post-speech pause before smoothly fading away into the side edge
+                delay(1050L)
                 dismissOverlay(appContext)
             }
         } else {
@@ -434,7 +508,7 @@ object LunaAssistantController {
                 statusBadge = ""
             )
             if (_liveState.value.isVisible) {
-                delay(500)
+                delay(900L)
                 dismissOverlay(appContext)
             }
         }

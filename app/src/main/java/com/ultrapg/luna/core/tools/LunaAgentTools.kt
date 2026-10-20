@@ -24,6 +24,7 @@ import android.os.BatteryManager
 import android.provider.AlarmClock
 import android.provider.Settings
 import android.view.KeyEvent
+import com.ultrapg.luna.assistant.LunaAssistantController
 import com.ultrapg.luna.core.database.LunaDatabase
 import com.ultrapg.luna.core.database.MemoryEntity
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
@@ -358,7 +359,9 @@ object LunaAgentTools {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         if (launchIntent != null) {
+            LunaAssistantController.notifyExternalActivityLaunched(context)
             context.startActivity(launchIntent)
+            LunaAssistantController.notifyExternalActivityLaunched(context)
             return JSONObject()
                 .put("ok", true)
                 .put("launched_app", targetLabel)
@@ -407,7 +410,9 @@ object LunaAgentTools {
                 putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            LunaAssistantController.notifyExternalActivityLaunched(context)
             context.startActivity(intent)
+            LunaAssistantController.notifyExternalActivityLaunched(context)
             JSONObject()
                 .put("ok", true)
                 .put("mode", "timer")
@@ -422,7 +427,9 @@ object LunaAgentTools {
                 putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            LunaAssistantController.notifyExternalActivityLaunched(context)
             context.startActivity(intent)
+            LunaAssistantController.notifyExternalActivityLaunched(context)
             JSONObject()
                 .put("ok", true)
                 .put("mode", "alarm")
@@ -470,7 +477,9 @@ object LunaAgentTools {
         val intent = Intent(action).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        LunaAssistantController.notifyExternalActivityLaunched(context)
         context.startActivity(intent)
+        LunaAssistantController.notifyExternalActivityLaunched(context)
         return JSONObject().put("ok", true).put("opened_settings", section).toString()
     }
 
