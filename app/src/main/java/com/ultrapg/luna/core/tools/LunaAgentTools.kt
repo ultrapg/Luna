@@ -258,25 +258,25 @@ object LunaAgentTools {
         if (settings.webSearchEnabled) {
             addTool(
                 name = "search_duckduckgo",
-                description = "Search the web using DuckDuckGo for up-to-date grounding, facts, news, weather, prices, or URLs. Supports a single `query` OR multiple `queries` in parallel, plus optional `read_top_pages` to automatically pull full text from top websites.",
+                description = "Fast web search using DuckDuckGo for facts, news, weather, prices, or live info. Prefer a single fast `query` by default for speed. Optionally accepts `queries` or `read_top_pages` (1) only when a bit more context is needed.",
                 properties = JSONObject()
-                    .put("query", JSONObject().put("type", "string").put("description", "Primary search query in English or German"))
+                    .put("query", JSONObject().put("type", "string").put("description", "Primary search query"))
                     .put(
                         "queries",
                         JSONObject()
                             .put("type", "array")
                             .put("items", JSONObject().put("type", "string"))
-                            .put("description", "Optional list of multiple search queries (2-4 angles) to run in parallel for deeper research")
+                            .put("description", "Optional extra search queries only if needed")
                     )
                     .put("max_results", JSONObject().put("type", "integer").put("description", "Max results per query (default 5)"))
-                    .put("read_top_pages", JSONObject().put("type", "integer").put("description", "Optional number of top result websites (0-4) to automatically fetch and read in parallel"))
+                    .put("read_top_pages", JSONObject().put("type", "integer").put("description", "Optional number of top pages to read (default 0 for speed; set to 1 if snippet is insufficient)"))
             )
         }
 
         if (settings.webSearchEnabled && settings.webReaderEnabled) {
             addTool(
                 name = "deep_research",
-                description = "Perform deep multi-search and multi-website research when the user asks a complex question, wants comparisons, or asks to search deeper. Runs multiple DuckDuckGo search queries in parallel AND pulls full readable text from multiple top websites concurrently.",
+                description = "Deep multi-query search and multi-website extraction. ONLY use this tool when the user explicitly asks for a detailed/deep search, thorough research, or multi-source comparison. For normal questions, prefer `search_duckduckgo` for speed.",
                 properties = JSONObject()
                     .put(
                         "queries",
@@ -289,7 +289,7 @@ object LunaAgentTools {
                         "max_pages_to_read",
                         JSONObject()
                             .put("type", "integer")
-                            .put("description", "Number of top unique websites to fetch and extract in parallel (default 3, max 5)")
+                            .put("description", "Number of top unique websites to fetch and extract in parallel (default 2, max 4)")
                     ),
                 required = listOf("queries")
             )

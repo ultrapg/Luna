@@ -422,10 +422,14 @@ object LunaAssistantController {
                 phase = AssistantOverlayPhase.THINKING,
                 statusBadge = if (isDe) "Luna denkt nach..." else "Luna is thinking..."
             )
+            val promptLang = OpenAiAgentEngine.detectLanguageOfText(
+                text = clean,
+                fallback = settings.appLanguage.resolveLanguageCode()
+            )
             submitPromptInternal(
                 appContext = appContext,
                 promptText = clean,
-                detectedLanguage = settings.appLanguage.resolveLanguageCode()
+                detectedLanguage = promptLang
             )
         }
     }
@@ -538,7 +542,8 @@ object LunaAssistantController {
                 statusBadge = ""
             )
             // Suspend until the entire TTS synthesis & playback completes
-            ttsEngine.speakAndAwait(result.replyText, detectedLanguage)
+            val replyLang = OpenAiAgentEngine.detectLanguageOfText(result.replyText, detectedLanguage)
+            ttsEngine.speakAndAwait(result.replyText, replyLang)
             // Mark the end of speech as the start of the 20s continuation countdown
             lastTurnActiveRealtimeMs = SystemClock.elapsedRealtime()
             _liveState.value = _liveState.value.copy(

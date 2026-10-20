@@ -15,6 +15,8 @@ import android.os.SystemClock
 import com.ultrapg.luna.core.database.ChatMessageEntity
 import com.ultrapg.luna.core.database.LunaDatabase
 import com.ultrapg.luna.core.mcp.LunaMcpClient
+import com.ultrapg.luna.core.mcp.McpRemoteTool
+import com.ultrapg.luna.core.settings.AppLanguage
 import com.ultrapg.luna.core.settings.LunaSettings
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.settings.ThinkingEffort
@@ -250,8 +252,6 @@ object OpenAiAgentEngine {
             emptyList()
         }
 
-        val systemPrompt = buildSystemPrompt(settings, memories.map { "${it.key}: ${it.value}" }, detectedLanguage)
-
         // Build OpenAI tools array (Android actions + DuckDuckGo + Web Reader + Memory + User MCPs + API Built-In MCPs)
         val toolsArray = LunaAgentTools.buildOpenAiToolSchemas(context)
         val mcpTools = if (settings.mcpServers.any { it.enabled } || settings.apiBuiltInMcpEnabled) {
@@ -267,6 +267,18 @@ object OpenAiAgentEngine {
             emptyList()
         }
         LunaMcpClient.appendMcpToolsToOpenAiArray(toolsArray, mcpTools)
+
+        val effectivePromptLang = detectLanguageOfText(
+            text = userPrompt,
+            fallback = detectedLanguage ?: settings.appLanguage.resolveLanguageCode()
+        )
+        val systemPrompt = buildSystemPrompt(
+            settings = settings,
+            memoriesList = memories.map { "${it.key}: ${it.value}" },
+            userPrompt = userPrompt,
+            detectedLanguage = effectivePromptLang,
+            discoveredMcpTools = mcpTools
+        )
 
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
@@ -810,18 +822,79 @@ object OpenAiAgentEngine {
             .trim()
     }
 
+    /**
+     * Lightweight language detector so Auto-Language mode always matches the language of the user's
+     * question (or the assistant's reply for TTS), regardless of the phone's UI locale or TTS model.
+     */
+    fun detectLanguageOfText(text: String, fallback: String = "en"): String {
+        val sample = text.trim().lowercase(Locale.ROOT)
+        if (sample.isEmpty()) return fallback
+
+        val hasGermanChars = sample.any { it == 'ä' || it == 'ö' || it == 'ü' || it == 'ß' }
+        val words = sample.split(Regex("[^a-zA-ZäöüßÄÖÜ]+")).filter { it.isNotEmpty() }
+
+        val germanStopWords = setOf(
+            "ich", "du", "er", "sie", "es", "wir", "ihr", "und", "oder", "aber", "nicht", "kein",
+            "keine", "ist", "sind", "war", "wie", "was", "wo", "wann", "warum", "wer", "welche",
+            "bitte", "danke", "mach", "mache", "öffne", "schalte", "stelle", "suche", "zeig",
+            "zeige", "mir", "mich", "dir", "dich", "auf", "für", "mit", "von", "nach", "über",
+            "heute", "morgen", "wetter", "uhr", "taschenlampe", "lautstärke", "akku", "wecker"
+        )
+        val englishStopWords = setOf(
+            "i", "you", "he", "she", "it", "we", "they", "and", "or", "but", "not", "is", "are",
+            "was", "were", "how", "what", "where", "when", "why", "who", "which", "please",
+            "thanks", "turn", "open", "set", "search", "show", "tell", "me", "my", "your", "the",
+            "for", "with", "from", "about", "today", "weather", "time", "flashlight", "volume",
+            "battery", "alarm", "can", "could", "would", "should"
+        )
+
+        var deScore = if (hasGermanChars) 2 else 0
+        var enScore = 0
+        for (w in words) {
+            if (germanStopWords.contains(w)) deScore++
+            if (englishStopWords.contains(w)) enScore++
+        }
+
+        return when {
+            deScore > enScore -> "de"
+            enScore > deScore -> "en"
+            else -> fallback
+        }
+    }
+
     private fun buildSystemPrompt(
         settings: LunaSettings,
         memoriesList: List<String>,
-        detectedLanguage: String?
+        userPrompt: String,
+        detectedLanguage: String?,
+        discoveredMcpTools: List<McpRemoteTool>
     ): String {
         val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm z (EEEE)", Locale.getDefault()).format(Date())
-        val isDeviceGerman = settings.appLanguage.isGerman
-        val langHint = when {
-            detectedLanguage == "de" || isDeviceGerman ->
-                "Default language: German (Deutsch). Always respond in natural, fluent German unless the user explicitly speaks another language."
-            else ->
-                "Default language: English. Respond in the user's language (defaulting to the device language). Keep responses concise, warm, and natural."
+        val promptLang = detectLanguageOfText(
+            text = userPrompt,
+            fallback = detectedLanguage ?: settings.appLanguage.resolveLanguageCode()
+        )
+
+        val langHint = when (settings.appLanguage) {
+            AppLanguage.AUTO -> """
+                ### LANGUAGE RULE (CRITICAL — AUTO LANGUAGE MODE):
+                - ALWAYS reply in the EXACT SAME LANGUAGE that the user used in their latest question/message (`"$userPrompt"`), regardless of the device's system language or what TTS voice output is configured!
+                - If the user asks in English, reply 100% in English. If the user asks in German, reply 100% in German. If the user asks in Spanish, French, or any other language, reply in that exact language.
+                - Only if the user's message is a language-neutral word (like an app name alone), fall back to ${if (promptLang == "de") "German (Deutsch)" else "English"}.
+            """.trimIndent()
+            AppLanguage.GERMAN ->
+                "Preferred language: German (Deutsch). Respond in natural, fluent German unless the user explicitly asks you to speak another language."
+            AppLanguage.ENGLISH ->
+                "Preferred language: English. Respond in natural, fluent English unless the user explicitly asks you to speak another language."
+        }
+
+        val mcpToolsBlock = if (discoveredMcpTools.isNotEmpty()) {
+            val formattedMcp = discoveredMcpTools.joinToString("\n") { t ->
+                "- `${t.toolName}` (${if (t.isApiBuiltIn) "API Built-In MCP" else "MCP: ${t.serverName}"}): ${t.description}"
+            }
+            "\n\n### Active API & MCP Tools Available in This Session:\n$formattedMcp"
+        } else {
+            ""
         }
 
         val memoryBlock = if (memoriesList.isNotEmpty()) {
@@ -837,8 +910,9 @@ object OpenAiAgentEngine {
         }
 
         return """
-            You are Luna, a warm, perceptive, and highly capable native Android voice assistant triggered from the phone's side button bubble.
+            You are Luna, a warm, perceptive, and fast native Android voice assistant triggered from the phone's side button bubble.
             Current local time on phone: $nowStr.
+            
             $langHint
             
             ### NATURAL SPOKEN VOICE PERSONA (ASSISTANT BUBBLE MODE):
@@ -848,29 +922,25 @@ object OpenAiAgentEngine {
             - Never start with stiff robotic preambles like "According to my web search", "Based on the provided results", "Here is a summary", or "As an AI". Jump straight into the answer naturally.
             - Write ONLY in smooth spoken flow text (Fließtext / full spoken sentences).
             - NEVER output Markdown tables, bullet points, numbered lists, headers (#), asterisks (*), code blocks, raw URLs, or bracketed citations ([1]).
-            - Format numbers, currencies, units, percentages, and times so they sound effortless when read aloud by TTS (for example, say "around twenty-five percent" or "25 percent" cleanly rather than dense symbol strings).
+            - Format numbers, currencies, units, percentages, and times so they sound effortless when read aloud by TTS.
             - Keep internal reasoning strictly inside <think>...</think> and put only the final spoken flow-text answer outside.
             
-            ### ADAPTIVE SEARCH DEPTH & MULTI-STEP EXECUTION RULES:
-            You have full access to:
-            - Android Hardware & System Actions (`set_flashlight`, `open_app`, `open_url_or_deep_link`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`)
-            - Web Search & Deep Multi-Site Grounding (`search_duckduckgo`, `deep_research`, `read_website`)
-            - Persistent Memory (`save_memory`, `recall_memories`, `forget_memory`)
-            - Model/API Built-In MCP tools and User MCP Server tools.
+            ### BALANCED TOOL USAGE & SPEED-FIRST RESEARCH STRATEGY:
+            You have access to Android Device Actions (`set_flashlight`, `open_app`, `open_url_or_deep_link`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`), Web Tools (`search_duckduckgo`, `read_website`, `deep_research`), Memory (`save_memory`, `recall_memories`, `forget_memory`), and any exposed API / MCP tools (such as web search engines, `context7` documentation lookup, or custom integrations).
             
-            Match your execution strategy to what the user is asking:
-            1. Quick Actions & Simple Facts (Shortest Path):
-               - For device commands (flashlight, volume, opening apps, alarms) or quick single-fact questions, take the shortest, fastest path.
-               - Batch multiple independent actions into a single step so they run in parallel, and confirm naturally in 1 to 2 spoken sentences.
-            2. Deep Research, Complex Questions & "Search Deeper" Requests (Multi-Search + Multi-Website Reading):
-               - Whenever the user asks you to search deeper, research a topic thoroughly, compare products/options, explain recent news/events in detail, or when initial search snippets are too shallow or conflicting:
-                 a) Use `deep_research` (passing 2 to 4 distinct search queries in `queries` and `max_pages_to_read = 3` or `4`) OR emit multiple `search_duckduckgo` calls from different angles (`queries` array or parallel tool calls).
-                 b) Pull and read multiple websites in parallel using `read_website` (`urls: [...]` array or multiple parallel `read_website` calls) so you get the full article context from several independent sources instead of relying on snippets alone.
-                 c) If reading those pages reveals a missing detail or a specific follow-up lead, do another targeted search or read additional URLs before answering.
-                 d) Synthesize everything you found across those multiple searches and websites into a cohesive, insightful, and natural spoken response.
-            3. Self-Correction on App Names:
+            Follow these core principles:
+            1. Prefer Speed by Default, with Light Grounding When Needed:
+               - Because you are a real-time speech assistant, ALWAYS prefer speed unless the user asks for a detailed/deep search.
+               - For device commands (flashlight, volume, opening apps, alarms), execute them immediately in 1 step and confirm in 1 short sentence.
+               - For normal factual, news, or live-info questions, do a quick, lightweight lookup first (e.g., a single `search_duckduckgo` query or an appropriate API/MCP tool, and only read 1 website with `read_website` if the search snippets don't already contain the answer). Do NOT run `deep_research` for normal everyday questions!
+            2. Balanced Use of All Available Tools (Built-In + API/MCP Tools like Context7 or Search Engines):
+               - Use whichever available tool (or combination of tools) best fits the request in a balanced, practical way — do not blindly over-prefer or ignore any tool.
+               - For example, if the API or MCP exposes specialized tools (such as `context7` for library/framework/code documentation, or a built-in API search tool), use them when relevant alongside or instead of `search_duckduckgo`, as needed to get accurate information quickly.
+            3. Deep Multi-Search & Multi-Website Research Only When Requested:
+               - Reserve `deep_research` (or running multiple search queries + pulling multiple websites in parallel) for when the user EXPLICITLY asks for a detailed search, deep research, or a thorough multi-source comparison.
+            4. Self-Correction on App Names:
                - If `open_app` returns `installed_apps_sample` because an app name didn't match directly, immediately call `open_app` with the exact matching name from `installed_apps_sample`.
-            $memoryBlock$customExtra
+            $mcpToolsBlock$memoryBlock$customExtra
         """.trimIndent()
     }
 
