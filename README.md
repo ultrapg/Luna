@@ -1,57 +1,61 @@
-# Luna — Native Android AI Digital Assistant (EN & DE)
+# Luna — Native Android AI Digital Assistant
 
-**Luna** (`com.ultrapg.luna`) is a native Android Digital Assistant built with **Material Design 3**, **Jetpack Compose**, and native Android `VoiceInteractionService` APIs. Designed for flagship and high-end Android smartphones (**8 GB minimum RAM, 12 GB+ recommended**), Luna can be triggered directly via the **physical side/power button** just like Gemini.
+**Luna** (`com.ultrapg.luna`) is a fast, privacy-focused native Android Digital Assistant built with **Material Design 3**, **Jetpack Compose**, and Android's native `VoiceInteractionService` architecture. Designed for modern Android smartphones (**8 GB minimum RAM, 12 GB+ recommended**), Luna triggers directly from your phone's **physical side/power button** as a sleek, edge-snapped vertical notch bubble.
 
 ---
 
 ## Key Features
 
-### 1. Side-Button Trigger & Gemini-Style Pill/Notch Overlay
-- **Native Default Digital Assistant (`ROLE_ASSISTANT`)**: Registers as Android's system-wide `VoiceInteractionService` + `VoiceInteractionSessionService` + `ACTION_ASSIST` handler + optional `AccessibilityService` shortcut.
-- **Edge-Docked Pill Bubble**: Spawns a compact pill-like notch right next to the physical side/power button on the screen edge.
-- **Gemini 4-Color Glowing Outline & Audio-Reactive Wave**: Features an animated sweeping multi-color perimeter glow (`#4285F4`, `#9B72CB`, `#D96570`, `#F4B400`) and a real-time 5-band audio-reactive waveform.
-- **Interactive Bubble Studio**: Resize the collapsed notch width/height, adjust vertical alignment with the physical button, scale the expanded pill, tune glow intensity, and switch between Right Notch, Left Notch, or Free Floating modes directly inside the app.
+### 1. Edge-Snapped Side-Notch Bubble & Material 3 Physics
+- **Native Default Digital Assistant (`ROLE_ASSISTANT`)**: Registers as Android's system-wide `VoiceInteractionService`, `VoiceInteractionSessionService`, `ACTION_ASSIST` handler, and optional `AccessibilityService` overlay.
+- **Minimal Vertical Side-Notch Pill**: Snaps flush against the left or right screen edge right next to the physical power/side button (`28dp × 104dp`), featuring Material Design 3 spatial spring pop-out physics and smooth post-speech fade-away transitions.
+- **Reactive Visual States**:
+  - **Listening**: Clean white 5-band audio-reactive microphone waveform.
+  - **Thinking**: Smoothly stretching white pill loading animation.
+  - **Speaking**: Live light-blue (`#64B5F6`) 5-band audio-reactive equalizer driven directly by the synthesized neural TTS audio stream.
+- **Outside-Touch Auto-Dismiss & Persistent App-Launch Continuity**: Tapping anywhere outside the bubble immediately stops and dismisses the assistant, while launching external apps (`open_app`, settings, timers, deep links) keeps the bubble alive so Luna always finishes speaking her confirmation.
+- **Fullscreen Power-Button Calibration**: Fullscreen edge-to-edge calibration mode using real display hardware metrics (`WindowManager.maximumWindowMetrics`) so you can drag the notch to the exact pixel height of your physical side button.
+- **Continuous Conversation Window**: Re-triggering the side button within a configurable window (default **20 seconds**) automatically continues the active conversation with full memory of previous messages and tool outputs; waiting longer starts a fresh chat session.
 
-### 2. 100% Local On-Device Voice Input (Desert Ant Labs `EAR` + `VOZ`)
-- **`EAR` Spoken Language Detection**: Automatically detects whether you are speaking **English (`en`)** or **German (`de`)** (plus 23 other languages) locally on the phone.
-- **`VOZ` Multilingual Speech-to-Text**: Fast, private on-device transcription with smart silence-aware chunking.
-- **Resumable Model Downloader**: Built-in HTTP Range resumable downloader with incremental SHA-256 verification and native `.dal-meta/manifest` (`DAL1`) generation.
+### 2. Redesigned Chat UI, Multi-Step Tool Timeline & Reasoning Inspector
+- **Live Multi-Step Execution Banner**: While Luna is thinking or running tools, the chat displays a real-time step-by-step execution timeline with running spinners, completion checkmarks, category badges (`ANDROID`, `WEB`, `MEMORY`, `API MCP`, `MCP`), and step latency in `ms`.
+- **Collapsible Model Reasoning Card**: Supports reasoning models (`<think>...</think>`, `reasoning_content`, and configurable `reasoning_effort`: `Default`, `Off`, `Low`, `Med`, `High`). Internal thoughts are shown in a collapsible reasoning card in the chat and are never read aloud by TTS.
+- **Interactive Tool Execution Inspector**: Tap any tool pill or the multi-step summary badge (`N Steps • ms`) above a message to inspect **what it did**, view JSON parameters, and interact with rich result cards (clickable DuckDuckGo search cards, extracted website reader cards, and device status telemetry chips).
 
-### 3. NPU / GPU / CPU Hardware Acceleration
-- Automatically detects your flagship SoC (`Qualcomm Snapdragon Hexagon QNN HTP`, `MediaTek Dimensity NeuroPilot`, `Google Tensor TPU`, `Samsung Exynos NPU`) and prioritizes NPU/NNAPI acceleration with seamless fallback to GPU (`OpenCL/GLES`) and multi-core CPU (`XNNPACK`).
+### 3. Balanced Tool Usage, Speed-First Grounding & Deep Research
+- **Android Hardware & System Control**:
+  - Toggle the camera **Flashlight / Torch** (`set_flashlight`)
+  - Launch installed Android apps with bilingual (EN/DE) alias & fuzzy matching plus automatic self-correction (`open_app`)
+  - Open URLs, YouTube searches, and Maps navigation (`open_url_or_deep_link`)
+  - Adjust system **Media, Ring, Notification, or Alarm volume** (`set_volume`)
+  - Set system **Alarms** and **Countdown Timers** (`set_alarm_or_timer`)
+  - Query **Battery level, charging state, volume, and time** (`get_device_status`)
+  - Control **Media Playback** (`play_pause`, `next`, `previous`)
+  - Open **System Settings** panels (`wifi`, `bluetooth`, `display`, `sound`, `battery`, `assistant`)
+  - Read or write the **System Clipboard** (`clipboard_action`)
+- **Speed-First Web Search & On-Demand Deep Research**:
+  - Prefers fast, single-step lookups (`search_duckduckgo` + `read_website`) by default so voice answers stay instant.
+  - When asked for a detailed or deep search, `deep_research` runs multiple search queries in parallel and pulls full readable text from multiple websites concurrently.
+- **API Built-In MCPs & External MCP Servers**:
+  - Automatically discovers and invokes **API Built-In MCPs** (`<baseUrl>/mcp`, server-side `executed_tools`, `mcp_calls`, `context7`, API web search, citations, etc.) as well as user-configured HTTP JSON-RPC / SSE **MCP Servers** in a balanced, task-appropriate way.
+- **Persistent On-Device Memory**: Saves, searches, and manages personal facts and preferences across sessions (`save_memory`, `recall_memories`, `forget_memory`).
 
-### 4. OpenAI-Compatible LLM Backend with Hybrid Editable Model Dropdown
-- Connect **any OpenAI-compatible API** (`OpenAI`, `OpenRouter`, `Groq`, `DeepSeek`, `Ollama`, `vLLM`, `LM Studio`) via Base URL and API Key.
-- **Hybrid Model Selector**: Either select from models dynamically discovered via `/v1/models` **or** type any custom model ID directly into the dropdown (even if it is not listed by the endpoint).
+### 4. 100% Local On-Device Voice Input (`EAR` + `VOZ`) & Neural Female TTS
+- **Desert Ant Labs `EAR` + `VOZ` STT**: On-device spoken language detection and fast offline speech-to-text with configurable silence auto-stop.
+- **Local Sherpa-ONNX Neural Female TTS**: High-quality offline neural female voices for **English** (`Amy Medium`, `Kokoro 82M af_heart`) and **German** (`Dii High`, `Kerstin`), plus a custom `.onnx` + `tokens.txt` voice model slot and Android neural TTS fallback.
+- **Auto-Language Matching**: Defaults to the device's language and, in Auto mode, always replies in the exact language the user asked their question in—optimized for natural spoken flow text without Markdown clutter.
 
-### 5. Android Hardware Control, Web Grounding & MCP Client
-- **Android Hardware & System Actions**:
-  - Turn the **Flashlight (Torch)** on or off (`CameraManager.setTorchMode`)
-  - Launch any installed Android app by name
-  - Adjust system **Media, Ring, Notification, or Alarm volume**
-  - Set system **Alarms** and **Countdown Timers**
-  - Query **Battery level, charging state, RAM & NPU status**
-  - Control **Media Playback** (`play`, `pause`, `next`, `previous`)
-  - Open **System Settings** panels (`Wi-Fi`, `Bluetooth`, `Display`, `Sound`, etc.)
-  - Read or copy text to the **Clipboard**
-- **Web Grounding Agent**:
-  - **DuckDuckGo Web Search**: Live web search for up-to-date facts and news.
-  - **Full Website Reader**: Fetches and extracts readable content from any URL.
-- **Persistent Assistant Memory**: Stores, recalls, and manages user preferences and facts across conversations.
-- **MCP (Model Context Protocol) Client**: Connect external HTTP JSON-RPC / SSE MCP servers (`tools/list` & `tools/call`) so Luna can act as a quick-ask and smart-home/developer agent.
-
-### 6. Fast Local Female Neural TTS + Custom Voice Slot
-- Supports **Sherpa-ONNX** neural female voices for **English** (`Amy Medium`, `Kokoro 82M af_heart`) and **German** (`Dii High`, `Kerstin`), plus zero-download Android female neural TTS fallback.
-- **Custom Voice Replacement Slot**: Ready for you to drop in your own custom-trained `.onnx` + `tokens.txt` female voice model at any time.
+### 5. OpenAI-Compatible AI Backend
+- Works with any OpenAI-compatible API (`OpenAI`, `OpenRouter`, `Groq`, `DeepSeek`, `Ollama`, `vLLM`, `LM Studio`, etc.) with live `/v1/models` discovery and custom model ID entry.
 
 ---
 
-## Deutsch (German Overview)
+## Deutsch (Überblick)
 
-**Luna** unterstützt vollständig **Deutsch** und **Englisch**:
-- Automatische Spracherkennung über **Desert Ant EAR & VOZ** direkt auf dem Gerät.
-- Natürliche weibliche deutsche & englische **Sherpa-ONNX TTS-Stimmen** sowie ein eigener Slot für selbst trainierte `.onnx`-Stimmmodelle.
-- Volle Android-Steuerung („Schalte die Taschenlampe ein", „Stelle einen Timer auf 5 Minuten", „Suche auf DuckDuckGo nach...") per langem Druck auf die Seitentaste.
+**Luna** ist ein nativer Android-Sprachassistent mit **Material Design 3**:
+- **Vertikale Side-Notch-Bubble**: Erscheint direkt neben der physischen Ein-/Aus-Taste (mit Vollbild-Kalibrierung), zeigt beim Zuhören eine weiße Wellenform, beim Nachdenken eine weiße Lade-Animation und beim Sprechen einen hellblauen Audio-Equalizer.
+- **Mehrstufige Werkzeug-Timeline & Gedankengang-Ansicht**: Zeigt im Chat genau an, welche Werkzeuge (`ANDROID`, `WEB`, `MEMORY`, `API MCP`, `MCP`) mit welchen Ergebnissen ausgeführt wurden.
+- **Lokale Spracherkennung (`EAR` + `VOZ`) & Lokale Neurale TTS (`Sherpa-ONNX`)**: Komplett auf dem Gerät ausgeführte Spracherkennung und natürliche weibliche Sprachausgabe in natürlichem Fließtext.
 
 ---
 
