@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.ultrapg.luna.assistant.LunaVoiceInteractionSessionService"
+    android:recognitionService="com.ultrapg.luna.assistant.LunaRecognitionService"
+    android:settingsActivity="com.ultrapg.luna.MainActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true"
+    android:supportsLocalInteraction="true" />

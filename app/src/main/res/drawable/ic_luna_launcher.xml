@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#0D111E"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Outer Gemini-inspired glowing ring -->
+    <path
+        android:fillColor="#4E82EE"
+        android:fillAlpha="0.22"
+        android:pathData="M54,18A36,36 0,1 1,18 54A36,36 0,0 1,54 18z" />
+    <!-- Crescent Moon + Sparkle representing Luna AI -->
+    <path
+        android:fillColor="#A8C7FA"
+        android:pathData="M61,30C47.7,30 37,40.7 37,54C37,67.3 47.7,78 61,78C65.2,78 69.1,76.9 72.5,75C63.8,73.1 57.2,65.3 57.2,56C57.2,46.7 63.8,38.9 72.5,37C69.1,35.1 65.2,30 61,30Z" />
+    <!-- 4-point AI Star -->
+    <path
+        android:fillColor="#D96570"
+        android:pathData="M71,28L73.5,35.5L81,38L73.5,40.5L71,48L68.5,40.5L61,38L68.5,35.5Z" />
+</vector>

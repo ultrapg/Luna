@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Luna</string>
+    <string name="accessibility_service_label">Luna Digital Assistant Overlay</string>
+    <string name="accessibility_service_desc">Enables Luna\'s Gemini-style side-notch voice overlay and side-button assistant trigger across all screens.</string>
+</resources>
