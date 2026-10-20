@@ -16,6 +16,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.os.Vibrator
 import android.util.Log
+import com.ultrapg.luna.MainActivity
 import com.ultrapg.luna.core.database.ChatMessageEntity
 import com.ultrapg.luna.core.database.ChatSessionEntity
 import com.ultrapg.luna.core.database.LunaDatabase
@@ -82,6 +83,13 @@ object LunaAssistantController {
 
     private val _liveState = MutableStateFlow(AssistantLiveState())
     val liveState: StateFlow<AssistantLiveState> = _liveState.asStateFlow()
+
+    private val _openChatTabRequests = MutableStateFlow(0L)
+    val openChatTabRequests: StateFlow<Long> = _openChatTabRequests.asStateFlow()
+
+    fun requestOpenChatTab() {
+        _openChatTabRequests.value = SystemClock.elapsedRealtime()
+    }
 
     private var activeTurnJob: Job? = null
     private var dismissAnimationJob: Job? = null
@@ -332,16 +340,49 @@ object LunaAssistantController {
         }
     }
 
+    /**
+     * Opens the active chat session inside Luna (`MainActivity` -> `CHATS` tab) when the user taps
+     * the side bubble while Luna is thinking or speaking, preserving the ongoing turn & speech.
+     */
+    fun openActiveChatInLuna(context: Context) {
+        val appContext = context.applicationContext
+        requestOpenChatTab()
+        val keepDock = LunaSettingsRepository.current(appContext).bubbleKeepAliveDock
+        dismissAnimationJob?.cancel()
+        _liveState.value = _liveState.value.copy(
+            isVisible = keepDock,
+            isDismissing = false,
+            isExpanded = false
+        )
+        if (!keepDock) {
+            LunaOverlayWindowManager.detachOverlay()
+        }
+        LunaVoiceInteractionSession.hideActiveSessionIfShown()
+
+        runCatching {
+            val intent = Intent(appContext, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                putExtra("open_tab", "CHATS")
+            }
+            appContext.startActivity(intent)
+        }
+    }
+
     fun toggleListeningFromPill(context: Context) {
         val appContext = context.applicationContext
         val current = _liveState.value
-        when (current.phase) {
-            AssistantOverlayPhase.LISTENING -> finishListeningAndProcess(appContext)
-            AssistantOverlayPhase.SPEAKING -> {
-                dismissOverlay(appContext)
-            }
-            AssistantOverlayPhase.THINKING, AssistantOverlayPhase.TRANSCRIBING -> {
-                dismissOverlay(appContext)
+        val isSpeakingNow = current.phase == AssistantOverlayPhase.SPEAKING ||
+            LunaTtsEngine.getInstance(appContext).isSpeaking.value
+        when {
+            current.phase == AssistantOverlayPhase.LISTENING -> finishListeningAndProcess(appContext)
+            isSpeakingNow ||
+                current.phase == AssistantOverlayPhase.THINKING ||
+                current.phase == AssistantOverlayPhase.TRANSCRIBING -> {
+                openActiveChatInLuna(appContext)
             }
             else -> {
                 _liveState.value = current.copy(

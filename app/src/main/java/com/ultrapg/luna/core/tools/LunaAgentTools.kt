@@ -258,9 +258,9 @@ object LunaAgentTools {
         if (settings.webSearchEnabled) {
             addTool(
                 name = "search_duckduckgo",
-                description = "Fast web search using DuckDuckGo for facts, news, weather, prices, or live info. Prefer a single fast `query` by default for speed. Optionally accepts `queries` or `read_top_pages` (1) only when a bit more context is needed.",
+                description = "Fast short web & news research using DuckDuckGo, live News RSS, and Wikipedia. MUST be called whenever the user asks about up-to-date, current, recent, or researchable information (e.g., latest AI models, tech releases, news, current events, weather, prices, sports, or post-cutoff facts). Do NOT call this for phone hardware actions like turning on the flashlight or opening apps.",
                 properties = JSONObject()
-                    .put("query", JSONObject().put("type", "string").put("description", "Primary search query"))
+                    .put("query", JSONObject().put("type", "string").put("description", "Primary search query (include current year 2026 when searching for latest/current info)"))
                     .put(
                         "queries",
                         JSONObject()
@@ -268,7 +268,7 @@ object LunaAgentTools {
                             .put("items", JSONObject().put("type", "string"))
                             .put("description", "Optional extra search queries only if needed")
                     )
-                    .put("max_results", JSONObject().put("type", "integer").put("description", "Max results per query (default 5)"))
+                    .put("max_results", JSONObject().put("type", "integer").put("description", "Max results per query (default 6)"))
                     .put("read_top_pages", JSONObject().put("type", "integer").put("description", "Optional number of top pages to read (default 0 for speed; set to 1 if snippet is insufficient)"))
             )
         }
@@ -765,13 +765,15 @@ object LunaAgentTools {
     }
 
     /**
-     * Searches DuckDuckGo HTML Lite endpoint + Instant Answer API for fast, single-step web grounding.
+     * Searches DuckDuckGo HTML Lite + Instant Answer API + Live Google News RSS + Wikipedia Search API
+     * for fast, reliable single-step web and current-events grounding.
      */
-    fun searchDuckDuckGo(query: String, maxResults: Int = 5): String {
+    fun searchDuckDuckGo(query: String, maxResults: Int = 6): String {
         if (query.isBlank()) {
             return JSONObject().put("ok", false).put("error", "Empty search query").toString()
         }
-        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val cleanQuery = query.trim()
+        val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
         val url = "https://html.duckduckgo.com/html/?q=$encoded"
 
         val request = Request.Builder()
@@ -782,7 +784,23 @@ object LunaAgentTools {
             .build()
 
         val resultsArr = JSONArray()
+        val seenTitles = mutableSetOf<String>()
         var instantSummary = ""
+
+        fun addResultIfUnique(title: String, resultUrl: String, domain: String, snippet: String) {
+            val cleanTitle = title.trim()
+            if (cleanTitle.isEmpty()) return
+            val normKey = cleanTitle.lowercase(Locale.ROOT).take(60)
+            if (!seenTitles.add(normKey)) return
+            resultsArr.put(
+                JSONObject()
+                    .put("rank", resultsArr.length() + 1)
+                    .put("title", cleanTitle)
+                    .put("url", resultUrl)
+                    .put("domain", domain)
+                    .put("snippet", snippet.trim())
+            )
+        }
 
         val iaUrl = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
         runCatching {
@@ -796,6 +814,7 @@ object LunaAgentTools {
             }
         }
 
+        // 1. DuckDuckGo Organic HTML results
         runCatching {
             httpClient.newCall(request).execute().use { response ->
                 val html = response.body?.string().orEmpty()
@@ -818,52 +837,89 @@ object LunaAgentTools {
                     val snippet = if (i < snippets.size) stripHtmlTags(snippets[i].groupValues[1]) else ""
                     val domain = runCatching { Uri.parse(resolvedUrl).host?.removePrefix("www.") ?: "" }.getOrDefault("")
                     if (title.isNotBlank() && resolvedUrl.isNotBlank()) {
-                        resultsArr.put(
-                            JSONObject()
-                                .put("rank", i + 1)
-                                .put("title", title)
-                                .put("url", resolvedUrl)
-                                .put("domain", domain)
-                                .put("snippet", snippet)
+                        addResultIfUnique(title, resolvedUrl, domain, snippet)
+                    }
+                }
+            }
+        }
+
+        // 2. Live Google News RSS feed for up-to-date news, model releases, and dated events
+        runCatching {
+            val isGermanQuery = cleanQuery.any { it == 'ä' || it == 'ö' || it == 'ü' || it == 'ß' } ||
+                Regex("\\b(was|wie|wer|wo|wann|aktuell|neueste|nachrichten|wetter|ki|heute)\\b", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(cleanQuery)
+            val rssUrl = if (isGermanQuery) {
+                "https://news.google.com/rss/search?q=$encoded&hl=de&gl=DE&ceid=DE:de"
+            } else {
+                "https://news.google.com/rss/search?q=$encoded&hl=en-US&gl=US&ceid=US:en"
+            }
+            val rssReq = Request.Builder()
+                .url(rssUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .get()
+                .build()
+            httpClient.newCall(rssReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val xml = resp.body?.string().orEmpty()
+                    val itemMatches = Regex("<item>([\\s\\S]*?)</item>", RegexOption.IGNORE_CASE).findAll(xml).take(4)
+                    for (m in itemMatches) {
+                        if (resultsArr.length() >= maxResults + 2) break
+                        val itemXml = m.groupValues[1]
+                        val rawTitle = Regex("<title>([\\s\\S]*?)</title>", RegexOption.IGNORE_CASE)
+                            .find(itemXml)?.groupValues?.get(1).orEmpty()
+                        val link = Regex("<link>([\\s\\S]*?)</link>", RegexOption.IGNORE_CASE)
+                            .find(itemXml)?.groupValues?.get(1)?.trim().orEmpty()
+                        val pubDate = Regex("<pubDate>([\\s\\S]*?)</pubDate>", RegexOption.IGNORE_CASE)
+                            .find(itemXml)?.groupValues?.get(1)?.trim().orEmpty()
+                        val source = Regex("<source[^>]*>([\\s\\S]*?)</source>", RegexOption.IGNORE_CASE)
+                            .find(itemXml)?.groupValues?.get(1)?.let { stripHtmlTags(it) }.orEmpty()
+                        val desc = Regex("<description>([\\s\\S]*?)</description>", RegexOption.IGNORE_CASE)
+                            .find(itemXml)?.groupValues?.get(1)?.let { stripHtmlTags(it) }.orEmpty()
+
+                        val cleanTitle = stripHtmlTags(rawTitle)
+                        val snippetParts = listOfNotNull(
+                            source.takeIf { it.isNotBlank() },
+                            pubDate.takeIf { it.isNotBlank() },
+                            desc.takeIf { it.isNotBlank() && !it.equals(cleanTitle, ignoreCase = true) }
+                        )
+                        addResultIfUnique(
+                            title = cleanTitle,
+                            resultUrl = link,
+                            domain = source.ifBlank { "news.google.com" },
+                            snippet = snippetParts.joinToString(" — ")
                         )
                     }
                 }
             }
         }
 
-        if (resultsArr.length() == 0) {
+        // 3. Wikipedia Search API for encyclopedic & entity grounding
+        if (resultsArr.length() < maxResults) {
             runCatching {
-                val iaReq = Request.Builder().url(iaUrl).get().build()
-                httpClient.newCall(iaReq).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    val json = JSONObject(body)
-                    val abstractText = json.optString("AbstractText", "")
-                    val abstractUrl = json.optString("AbstractURL", "")
-                    if (abstractText.isNotBlank()) {
-                        resultsArr.put(
-                            JSONObject()
-                                .put("rank", 1)
-                                .put("title", json.optString("Heading", query))
-                                .put("url", abstractUrl)
-                                .put("domain", runCatching { Uri.parse(abstractUrl).host?.removePrefix("www.") ?: "" }.getOrDefault(""))
-                                .put("snippet", abstractText)
-                        )
-                    }
-                    val related = json.optJSONArray("RelatedTopics")
-                    if (related != null) {
-                        for (i in 0 until minOf(related.length(), maxResults)) {
-                            val item = related.optJSONObject(i) ?: continue
-                            val text = item.optString("Text", "")
-                            val firstUrl = item.optString("FirstURL", "")
-                            if (text.isNotBlank()) {
-                                resultsArr.put(
-                                    JSONObject()
-                                        .put("rank", resultsArr.length() + 1)
-                                        .put("title", text.take(80))
-                                        .put("url", firstUrl)
-                                        .put("domain", runCatching { Uri.parse(firstUrl).host?.removePrefix("www.") ?: "" }.getOrDefault(""))
-                                        .put("snippet", text)
-                                )
+                val isGermanQuery = cleanQuery.any { it == 'ä' || it == 'ö' || it == 'ü' || it == 'ß' } ||
+                    Regex("\\b(was|wie|wer|wo|wann|aktuell|neueste|nachrichten|wetter|ki)\\b", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(cleanQuery)
+                val wikiHost = if (isGermanQuery) "de.wikipedia.org" else "en.wikipedia.org"
+                val wikiUrl = "https://$wikiHost/w/api.php?action=query&list=search&srsearch=$encoded&utf8=&format=json&srlimit=3"
+                val wikiReq = Request.Builder()
+                    .url(wikiUrl)
+                    .header("User-Agent", "LunaAndroidAssistant/1.0")
+                    .get()
+                    .build()
+                httpClient.newCall(wikiReq).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val json = JSONObject(resp.body?.string().orEmpty())
+                        val searchArr = json.optJSONObject("query")?.optJSONArray("search")
+                        if (searchArr != null) {
+                            for (i in 0 until searchArr.length()) {
+                                if (resultsArr.length() >= maxResults + 2) break
+                                val item = searchArr.optJSONObject(i) ?: continue
+                                val title = item.optString("title", "").trim()
+                                val snippet = stripHtmlTags(item.optString("snippet", ""))
+                                if (title.isNotBlank() && snippet.isNotBlank()) {
+                                    val articleUrl = "https://$wikiHost/wiki/${URLEncoder.encode(title.replace(' ', '_'), "UTF-8")}"
+                                    addResultIfUnique(title, articleUrl, wikiHost, snippet)
+                                }
                             }
                         }
                     }
@@ -873,7 +929,7 @@ object LunaAgentTools {
 
         return JSONObject()
             .put("ok", true)
-            .put("query", query)
+            .put("query", cleanQuery)
             .put("instant_answer", instantSummary)
             .put("results_count", resultsArr.length())
             .put("results", resultsArr)

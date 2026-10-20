@@ -272,12 +272,14 @@ object OpenAiAgentEngine {
             text = userPrompt,
             fallback = detectedLanguage ?: settings.appLanguage.resolveLanguageCode()
         )
+        val promptResearchIntent = classifyPromptResearchNeed(userPrompt)
         val systemPrompt = buildSystemPrompt(
             settings = settings,
             memoriesList = memories.map { "${it.key}: ${it.value}" },
             userPrompt = userPrompt,
             detectedLanguage = effectivePromptLang,
-            discoveredMcpTools = mcpTools
+            discoveredMcpTools = mcpTools,
+            researchIntent = promptResearchIntent
         )
 
         val messages = JSONArray()
@@ -601,6 +603,66 @@ object OpenAiAgentEngine {
 
             val cleanReply = stripThinkingBlocks(stepRawContent)
 
+            // Automatic Short Research Safety Net:
+            // If this turn clearly requires up-to-date or live web research (e.g. "latest AI models",
+            // "news", "weather", "prices", "current events") and is NOT a device command (like flashlight),
+            // but the LLM tried to answer from outdated training weights on step 0 without calling any tool,
+            // perform a short `search_duckduckgo` lookup automatically and let the LLM ground its answer!
+            val needsMandatoryResearch = (promptResearchIntent == PromptResearchIntent.SHORT_UP_TO_DATE_RESEARCH ||
+                promptResearchIntent == PromptResearchIntent.DEEP_RESEARCH) &&
+                settings.webSearchEnabled
+            if (step == 0 && needsMandatoryResearch && toolRecords.isEmpty() && executedTools.isEmpty()) {
+                val autoQuery = buildShortResearchQuery(userPrompt, effectivePromptLang)
+                val autoArgs = JSONObject().put("query", autoQuery).put("max_results", 6)
+                val runningRecord = ToolExecutionRecord(
+                    stepIndex = 1,
+                    toolName = "search_duckduckgo",
+                    displayTitle = formatToolDisplayLabel("search_duckduckgo", autoArgs, isDe),
+                    whatItDid = formatToolDisplayLabel("search_duckduckgo", autoArgs, isDe),
+                    resultSummary = if (isDe) "Wird ausgeführt..." else "Running...",
+                    rawArgumentsJson = autoArgs.toString(),
+                    durationMs = 0L,
+                    category = "WEB",
+                    status = "RUNNING"
+                )
+                onLiveTraceUpdated?.invoke(listOf(runningRecord), collectedThoughts.joinToString("\n\n"))
+                onToolStep?.invoke(
+                    AgentStepEvent(
+                        toolName = "search_duckduckgo",
+                        statusText = formatToolDisplayLabel("search_duckduckgo", autoArgs, isDe)
+                    )
+                )
+
+                val searchStartMs = SystemClock.elapsedRealtime()
+                val searchOutput = LunaAgentTools.executeBuiltInTool(context, "search_duckduckgo", autoArgs)
+                val searchElapsedMs = (SystemClock.elapsedRealtime() - searchStartMs).coerceAtLeast(1L)
+
+                executedTools.add("search_duckduckgo")
+                val doneRecord = buildToolExecutionRecord(
+                    stepIndex = 1,
+                    fnName = "search_duckduckgo",
+                    args = autoArgs,
+                    rawArgs = autoArgs.toString(),
+                    rawOutput = searchOutput,
+                    durationMs = searchElapsedMs,
+                    categoryOverride = "WEB",
+                    isDe = isDe
+                )
+                toolRecords.add(doneRecord)
+                onLiveTraceUpdated?.invoke(toolRecords.toList(), collectedThoughts.joinToString("\n\n"))
+
+                messages.put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put(
+                            "content",
+                            "[Live Web & News Research Results for \"$autoQuery\"]:\n$searchOutput\n\n" +
+                                "Now answer the user's question (\"$userPrompt\") naturally in spoken flow text using these up-to-date research results."
+                        )
+                )
+                continue
+            }
+
             prependThinkingRecordIfPresent(
                 collectedThoughts = collectedThoughts,
                 totalThinkingDurationMs = totalThinkingDurationMs,
@@ -905,14 +967,110 @@ object OpenAiAgentEngine {
         }
     }
 
+    enum class PromptResearchIntent {
+        DEVICE_OR_LOCAL_ACTION,
+        CASUAL_OR_TIMELESS,
+        SHORT_UP_TO_DATE_RESEARCH,
+        DEEP_RESEARCH
+    }
+
+    /**
+     * Classifies whether the user's prompt is:
+     * - A local Android hardware/device command (e.g., "turn on the flashlight", "open Spotify", "set volume") -> NO web research
+     * - Casual conversation or timeless basics -> NO forced web research
+     * - An explicit request for deep multi-source research -> DEEP_RESEARCH
+     * - Up-to-date, post-cutoff, news, AI models, tech, prices, weather, or factual lookup -> SHORT_UP_TO_DATE_RESEARCH
+     */
+    fun classifyPromptResearchNeed(userPrompt: String): PromptResearchIntent {
+        val clean = userPrompt.trim().lowercase(Locale.ROOT)
+        if (clean.isEmpty()) return PromptResearchIntent.CASUAL_OR_TIMELESS
+
+        // 1. Check explicit Deep Research requests first
+        val deepPatterns = listOf(
+            "deep research", "search deeper", "detailed search", "in-depth research",
+            "thorough research", "pull multiple websites", "multiple websites",
+            "tiefensuche", "tiefenrecherche", "recherchiere ausführlich", "detaillierte suche",
+            "gründlich recherchieren", "mehrere webseiten"
+        )
+        if (deepPatterns.any { clean.contains(it) }) {
+            return PromptResearchIntent.DEEP_RESEARCH
+        }
+
+        // 2. Check pure Android Device / Hardware / Local Actions (Never research for these!)
+        val isDeviceCommand = Regex(
+            "\\b(flashlight|torch|taschenlampe|blitzlicht|" +
+                "set volume|change volume|turn up volume|turn down volume|mute|unmute|lautstärke|lauter|leiser|stumm|" +
+                "set an alarm|set alarm|set a timer|set timer|wake me|wecker|timer stellen|stelle einen timer|stell einen wecker|" +
+                "battery level|battery status|my battery|akkustand|akku|ladestand|" +
+                "what time is it|wie spät ist es|wie viel uhr|" +
+                "pause music|play music|resume music|next song|next track|previous song|skip song|skip track|nächster song|nächstes lied|musik stopp|musik weiter|" +
+                "clipboard|zwischenablage|remember that|save to memory|merke dir|vergiss)\\b",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(clean) ||
+            Regex("^(please\\s+|bitte\\s+)?(open|launch|start|öffne|starte|turn on|turn off|switch on|switch off|schalte|mach)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(clean)
+
+        if (isDeviceCommand) {
+            return PromptResearchIntent.DEVICE_OR_LOCAL_ACTION
+        }
+
+        // 3. Check if the prompt asks about up-to-date, current, post-cutoff, news, AI models, or researchable topics
+        val upToDateOrResearchRegex = Regex(
+            "\\b(" +
+                // Recency & time-sensitive markers (EN & DE)
+                "latest|newest|most recent|current|currently|right now|today|tonight|yesterday|this week|this month|this year|" +
+                "2024|2025|2026|2027|recent|recently|new release|just released|upcoming|state of the art|sota|" +
+                "neueste|neuesten|neuester|neuste|neusten|aktuell|aktuelle|aktuellen|aktueller|derzeit|momentan|zurzeit|" +
+                "heute|gestern|diese woche|diesen monat|dieses jahr|kürzlich|vor kurzem|brandneu|erscheint|erschienen|" +
+                // AI models, LLMs & fast-moving tech (always post-cutoff!)
+                "ai model|ai models|language model|language models|llm|llms|gpt-4|gpt-5|gpt 4|gpt 5|chatgpt|openai|" +
+                "claude|anthropic|gemini|gemma|deepseek|llama|qwen|mistral|grok|sora|flux|midjourney|copilot|cursor|context7|" +
+                "ki modell|ki-modell|ki modelle|ki-modelle|sprachmodell|sprachmodelle|benchmark|leaderboard|" +
+                "android 15|android 16|android 17|ios 18|ios 19|ios 20|iphone 16|iphone 17|pixel 9|pixel 10|galaxy s2|rtx 50|snapdragon|" +
+                // News, current events, politics, weather, finance, sports, release dates
+                "news|headlines|breaking|what happened|what's happening|what is happening|update on|updates on|" +
+                "election|president of|chancellor|prime minister|ceo of|" +
+                "weather|forecast|temperature in|will it rain|is it raining|" +
+                "stock price|share price|bitcoin|btc|ethereum|crypto|exchange rate|market cap|price of|how much does|how much is|" +
+                "who won|score of|standings|champions league|bundesliga|premier league|world cup|nba|nfl|formula 1|f1|" +
+                "nachrichten|neuigkeiten|schlagzeilen|was ist passiert|was gibt es neues|was ist los|" +
+                "wahl|bundeskanzler|präsident|wetter|wetterbericht|temperatur|regnet es|" +
+                "aktienkurs|kurs von|preis von|was kostet|wie viel kostet|wer hat gewonnen|spielstand|tabelle|" +
+                "release date|when does|when is .* released|wann erscheint|wann kommt|" +
+                // Explicit research / lookup verbs
+                "search for|search online|look up|find out|research|suche nach|such nach|recherchiere|schau nach|finde heraus" +
+                ")\\b",
+            RegexOption.IGNORE_CASE
+        )
+
+        if (upToDateOrResearchRegex.containsMatchIn(clean)) {
+            return PromptResearchIntent.SHORT_UP_TO_DATE_RESEARCH
+        }
+
+        return PromptResearchIntent.CASUAL_OR_TIMELESS
+    }
+
+    private fun buildShortResearchQuery(userPrompt: String, lang: String): String {
+        val cleaned = userPrompt
+            .replace(Regex("(?i)^(hey luna|luna|please|bitte|can you|kannst du|tell me|sag mir|what are|what is|was sind|was ist)\\s+"), "")
+            .replace(Regex("[?!.]+$"), "")
+            .trim()
+            .ifBlank { userPrompt.trim() }
+        val currentYear = SimpleDateFormat("yyyy", Locale.ROOT).format(Date())
+        val mentionsYear = Regex("\\b202[4-9]\\b").containsMatchIn(cleaned)
+        return if (!mentionsYear) "$cleaned $currentYear" else cleaned
+    }
+
     private fun buildSystemPrompt(
         settings: LunaSettings,
         memoriesList: List<String>,
         userPrompt: String,
         detectedLanguage: String?,
-        discoveredMcpTools: List<McpRemoteTool>
+        discoveredMcpTools: List<McpRemoteTool>,
+        researchIntent: PromptResearchIntent = classifyPromptResearchNeed(userPrompt)
     ): String {
         val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm z (EEEE)", Locale.getDefault()).format(Date())
+        val currentYear = SimpleDateFormat("yyyy", Locale.ROOT).format(Date())
         val promptLang = detectLanguageOfText(
             text = userPrompt,
             fallback = detectedLanguage ?: settings.appLanguage.resolveLanguageCode()
@@ -952,9 +1110,39 @@ object OpenAiAgentEngine {
             ""
         }
 
+        val turnRoutingDirective = when (researchIntent) {
+            PromptResearchIntent.DEVICE_OR_LOCAL_ACTION -> """
+                
+                ### CURRENT TURN DIRECTIVE (DEVICE / LOCAL COMMAND):
+                - The user's message (`"$userPrompt"`) is a direct phone/device action.
+                - Call the appropriate Android device tool (`set_flashlight`, `open_app`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `control_media`, `open_system_settings`, etc.) immediately in 1 step.
+                - Do NOT call `search_duckduckgo` or do any web research for this command!
+            """.trimIndent()
+            PromptResearchIntent.SHORT_UP_TO_DATE_RESEARCH -> """
+                
+                ### CURRENT TURN DIRECTIVE (MANDATORY SHORT UP-TO-DATE RESEARCH):
+                - The user's message (`"$userPrompt"`) asks about up-to-date, current, or researchable information (Current Year: $currentYear).
+                - Your internal training weights are OUTDATED for this topic.
+                - You MUST call `search_duckduckgo` (with a focused search query including `$currentYear` if relevant) or an appropriate search/MCP tool to perform a short research BEFORE answering! Never answer from memory alone on this turn.
+            """.trimIndent()
+            PromptResearchIntent.DEEP_RESEARCH -> """
+                
+                ### CURRENT TURN DIRECTIVE (DEEP RESEARCH REQUESTED):
+                - The user explicitly asked for a deep/detailed research on `"$userPrompt"`.
+                - Call `deep_research` (with 2–4 distinct search queries and `max_pages_to_read: 2` or `3`) before answering.
+            """.trimIndent()
+            PromptResearchIntent.CASUAL_OR_TIMELESS -> """
+                
+                ### CURRENT TURN DIRECTIVE (SMART JUDGMENT):
+                - Decide whether `"$userPrompt"` needs up-to-date/factual verification:
+                  - If it is about any specific person, company, product, recent technology, event, or fact that could have changed or benefits from verification, do a quick 1-step `search_duckduckgo` lookup first.
+                  - If it is a device action, casual small talk, math, translation, or purely timeless knowledge, handle it directly without web search.
+            """.trimIndent()
+        }
+
         return """
             You are Luna, a warm, perceptive, and fast native Android voice assistant triggered from the phone's side button bubble.
-            Current local time on phone: $nowStr.
+            Current local time on phone: $nowStr (Year: $currentYear).
             
             $langHint
             
@@ -968,22 +1156,24 @@ object OpenAiAgentEngine {
             - Format numbers, currencies, units, percentages, and times so they sound effortless when read aloud by TTS.
             - Keep internal reasoning strictly inside <think>...</think> and put only the final spoken flow-text answer outside.
             
-            ### BALANCED TOOL USAGE & SPEED-FIRST RESEARCH STRATEGY:
-            You have access to Android Device Actions (`set_flashlight`, `open_app`, `open_url_or_deep_link`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`), Web Tools (`search_duckduckgo`, `read_website`, `deep_research`), Memory (`save_memory`, `recall_memories`, `forget_memory`), and any exposed API / MCP tools (such as web search engines, `context7` documentation lookup, or custom integrations).
+            ### WHEN TO RESEARCH vs. WHEN NOT TO RESEARCH (CRITICAL):
+            You have access to Android Device Actions (`set_flashlight`, `open_app`, `open_url_or_deep_link`, `set_volume`, `set_alarm_or_timer`, `get_device_status`, `open_system_settings`, `control_media`, `clipboard_action`), Web Research Tools (`search_duckduckgo`, `read_website`, `deep_research`), Memory (`save_memory`, `recall_memories`, `forget_memory`), and exposed API / MCP tools (such as web search engines, `context7` documentation lookup, or custom integrations).
             
-            Follow these core principles:
-            1. Prefer Speed by Default, with Light Grounding When Needed:
-               - Because you are a real-time speech assistant, ALWAYS prefer speed unless the user asks for a detailed/deep search.
-               - For device commands (flashlight, volume, opening apps, alarms), execute them immediately in 1 step and confirm in 1 short sentence.
-               - For normal factual, news, or live-info questions, do a quick, lightweight lookup first (e.g., a single `search_duckduckgo` query or an appropriate API/MCP tool, and only read 1 website with `read_website` if the search snippets don't already contain the answer). Do NOT run `deep_research` for normal everyday questions!
-            2. Balanced Use of All Available Tools (Built-In + API/MCP Tools like Context7 or Search Engines):
-               - Use whichever available tool (or combination of tools) best fits the request in a balanced, practical way — do not blindly over-prefer or ignore any tool.
-               - For example, if the API or MCP exposes specialized tools (such as `context7` for library/framework/code documentation, or a built-in API search tool), use them when relevant alongside or instead of `search_duckduckgo`, as needed to get accurate information quickly.
-            3. Deep Multi-Search & Multi-Website Research Only When Requested:
-               - Reserve `deep_research` (or running multiple search queries + pulling multiple websites in parallel) for when the user EXPLICITLY asks for a detailed search, deep research, or a thorough multi-source comparison.
-            4. Self-Correction on App Names:
+            Follow these exact rules:
+            1. ALWAYS Do a Short Research for Up-to-Date, Post-Cutoff, or Factual Topics:
+               - Your internal training knowledge has a cutoff and does NOT know current $currentYear facts.
+               - Whenever the user asks about information that needs to be researched or needs to be up to date — such as **the latest AI models**, tech releases, software versions, news, current events, weather, stock/crypto prices, sports scores, current CEOs/leaders, release dates, or any factual topic that can change over time — you **MUST ALWAYS** perform a **short, fast research** first using `search_duckduckgo` (1 targeted query, optionally including `$currentYear`, or `read_top_pages: 1` if snippet detail is needed) or a relevant API/MCP tool!
+               - Never guess or rely on outdated training weights for up-to-date topics.
+            2. NEVER Research for Device Commands or Casual Small Talk:
+               - If the user says *"turn on the flashlight"*, *"open Spotify"*, *"set volume to 50%"*, *"set an alarm for 7 AM"*, or *"check my battery"*, execute that Android tool immediately in 1 step and confirm in 1 short sentence. Do NOT search the web!
+               - If the user says hello, asks for a joke, simple math, translation, or timeless elementary concepts, answer directly without searching.
+            3. Balanced Use of All Available Tools (Built-In + API/MCP Tools like Context7):
+               - Use whichever available tool (built-in `search_duckduckgo`, `read_website`, or exposed API/MCP tools like `context7`) best fits the request in a balanced way.
+            4. Deep Multi-Search & Multi-Website Research Only When Requested:
+               - Keep normal research short and fast (`search_duckduckgo`). Reserve `deep_research` (multiple queries + multiple websites) for when the user explicitly asks for a deep/detailed search.
+            5. Self-Correction on App Names:
                - If `open_app` returns `installed_apps_sample` because an app name didn't match directly, immediately call `open_app` with the exact matching name from `installed_apps_sample`.
-            $mcpToolsBlock$memoryBlock$customExtra
+            $turnRoutingDirective$mcpToolsBlock$memoryBlock$customExtra
         """.trimIndent()
     }
 

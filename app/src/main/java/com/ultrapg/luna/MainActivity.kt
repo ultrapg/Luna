@@ -1,6 +1,7 @@
 package com.ultrapg.luna
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import com.ultrapg.luna.assistant.AssistantRoleHelper
+import com.ultrapg.luna.assistant.LunaAssistantController
 import com.ultrapg.luna.core.settings.LunaSettingsRepository
 import com.ultrapg.luna.core.speech.LunaTtsEngine
 import com.ultrapg.luna.ui.screens.AiSettingsScreen
@@ -64,13 +66,23 @@ class MainActivity : ComponentActivity() {
         runCatching {
             volumeControlStream = LunaTtsEngine.getInstance(applicationContext).getPreferredVolumeControlStream()
         }
+        if (intent?.getStringExtra("open_tab") == "CHATS") {
+            LunaAssistantController.requestOpenChatTab()
+        }
 
         setContent {
             LunaTheme {
                 val settings by LunaSettingsRepository.settingsFlow.collectAsState()
+                val openChatTabReq by LunaAssistantController.openChatTabRequests.collectAsState()
                 val isGerman = settings.appLanguage.isGerman
 
                 var currentTab by remember { mutableStateOf(LunaTab.CHATS) }
+
+                LaunchedEffect(openChatTabReq) {
+                    if (openChatTabReq > 0L) {
+                        currentTab = LunaTab.CHATS
+                    }
+                }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -155,6 +167,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getStringExtra("open_tab") == "CHATS") {
+            LunaAssistantController.requestOpenChatTab()
         }
     }
 }

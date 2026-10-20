@@ -154,6 +154,12 @@ class LunaVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
             }
             return false
         }
+
+        fun hideActiveSessionIfShown() {
+            runCatching {
+                activeSession?.hide()
+            }
+        }
     }
 
     private var pillContainerView: View? = null
